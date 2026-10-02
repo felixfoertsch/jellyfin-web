@@ -63,6 +63,7 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                 else:
                     raise RuntimeError(f'Patch no longer applies: {name}\n{forward.stderr}'
                                        'No source branch or image was published.')
+            config['ref'] = ref
             config['commit'] = upstream
             (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
             git(candidate, 'add', '--all')
@@ -79,13 +80,14 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             git(root, 'worktree', 'remove', '--force', str(candidate))
     if source != base:
         git(root, 'reset', '--hard', source)
-    return {'base_sha': base, 'upstream_sha': upstream, 'source_sha': source}
+    return {'base_sha': base, 'upstream_sha': upstream, 'source_sha': source,
+            'source_tree': git(root, 'rev-parse', source + '^{tree}').stdout.strip()}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--upstream-url', help='Override for local integration tests.')
-    parser.add_argument('--upstream-ref', help='Override for local integration tests.')
+    parser.add_argument('--upstream-ref', help='Explicit upstream branch or release-tag ref.')
     args = parser.parse_args()
     root = Path(git(Path.cwd(), 'rev-parse', '--show-toplevel').stdout.strip())
     try:

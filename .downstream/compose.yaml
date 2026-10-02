@@ -1,8 +1,9 @@
 # Standalone deployment: attach this service to the server's existing network.
 # Set JELLYFIN_DOCKER_NETWORK to that Docker network name before running Compose.
+# latest = official release + patch; nightly = upstream master + patch.
 services:
   jellyfin-web:
-    image: ghcr.io/felixfoertsch/jellyfin-web:latest
+    image: ghcr.io/felixfoertsch/jellyfin-web:${JELLYFIN_WEB_TAG:-latest}
     restart: unless-stopped
     environment:
       JELLYFIN_SERVER: ${JELLYFIN_SERVER:-jellyfin:8096}
