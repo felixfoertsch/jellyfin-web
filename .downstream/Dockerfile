@@ -24,13 +24,18 @@ COPY --chown=101:101 .downstream/nginx.conf.template /etc/nginx/templates/defaul
 COPY --chmod=755 .downstream/19-validate-server.sh /docker-entrypoint.d/19-validate-server.sh
 ARG SOURCE_REVISION=local
 ARG UPSTREAM_REVISION=unknown
+ARG CHANNEL=local
+ARG UPSTREAM_VERSION=unknown
 LABEL org.opencontainers.image.title="Jellyfin Web with downstream segment defaults" \
-      org.opencontainers.image.description="Unofficial standalone web client; follows upstream master" \
+      org.opencontainers.image.description="Unofficial standalone web client; release and nightly channels" \
       org.opencontainers.image.source="https://github.com/felixfoertsch/jellyfin-web" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${UPSTREAM_VERSION}" \
       org.opencontainers.image.licenses="GPL-2.0-or-later" \
+      io.github.felixfoertsch.jellyfin-web.channel="${CHANNEL}" \
       io.github.felixfoertsch.jellyfin-web.upstream="${UPSTREAM_REVISION}"
-RUN printf '{"revision":"%s","upstream":"%s"}\n' "$SOURCE_REVISION" "$UPSTREAM_REVISION" \
+RUN printf '{"revision":"%s","upstream":"%s","channel":"%s","version":"%s"}\n' \
+    "$SOURCE_REVISION" "$UPSTREAM_REVISION" "$CHANNEL" "$UPSTREAM_VERSION" \
     > /usr/share/nginx/html/web/downstream-build.json
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

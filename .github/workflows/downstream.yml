@@ -6,7 +6,13 @@ on:
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Rebuild even when both channels are already published
+        type: boolean
+        default: false
 
+# Retain the original group so old and new publishers cannot overlap.
 concurrency:
   group: downstream-master
   cancel-in-progress: false
@@ -19,26 +25,39 @@ env:
 
 jobs:
   sync-test-publish:
+    name: Build and publish ${{ matrix.channel }}
     if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/master'
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [release, nightly]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: write
       packages: write
     steps:
-      - name: Check out the current fork
+      - name: Check out the current fork tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: master
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Test the source-sync machinery
+      - name: Test source synchronization and channel isolation
         run: python3 -m unittest discover -s .downstream/tests -v
 
-      - name: Reconstruct upstream master plus our patch queue
+      - name: Resolve official release or upstream master
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .downstream/channels.py resolve '${{ matrix.channel }}'
+
+      - name: Reconstruct the selected upstream source plus our patch queue
         id: source
-        run: python3 .downstream/sync-upstream.py
+        env:
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+        run: python3 .downstream/sync-upstream.py --upstream-ref "$UPSTREAM_REF"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -46,7 +65,24 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Plan tags and check whether this source is already published
+        id: publication
+        env:
+          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          SOURCE_TREE: ${{ steps.source.outputs.source_tree }}
+          FORCE_REBUILD: ${{ inputs.rebuild || false }}
+        run: python3 .downstream/channels.py plan '${{ matrix.channel }}'
+
       - name: Build, run regression tests, and compile production assets
+        if: steps.publication.outputs.build == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -58,58 +94,75 @@ jobs:
           build-args: |
             SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
             UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
-          cache-from: type=gha,scope=patched-web
-          cache-to: type=gha,mode=max,scope=patched-web
+            CHANNEL=${{ matrix.channel }}
+            UPSTREAM_VERSION=${{ steps.channel.outputs.version }}
+          cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
+          cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
 
       - name: Smoke-test static files, API routing, and WebSockets
+        if: steps.publication.outputs.build == 'true'
         run: bash .downstream/smoke-test.sh jellyfin-web-smoke:local
 
-      - name: Advance the fork only after tests and the image build succeed
+      - name: Advance master only with validated nightly source
+        if: matrix.channel == 'nightly'
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
         run: bash .downstream/push-source.sh
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Preserve validated release source under its own Git tag
+        if: matrix.channel == 'release' && steps.publication.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
+        run: bash .downstream/push-release-source.sh
 
-      - name: Publish AMD64 and ARM64 images
+      - name: Publish AMD64 and ARM64 images for this channel only
+        if: steps.publication.outputs.build == 'true'
+        id: publish
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: .downstream/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/felixfoertsch/jellyfin-web:latest
-            ghcr.io/felixfoertsch/jellyfin-web:edge
-            ghcr.io/felixfoertsch/jellyfin-web:sha-${{ steps.source.outputs.source_sha }}-run-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ steps.publication.outputs.tags }}
           build-args: |
             SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
             UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
+            CHANNEL=${{ matrix.channel }}
+            UPSTREAM_VERSION=${{ steps.channel.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/felixfoertsch/jellyfin-web
             org.opencontainers.image.revision=${{ steps.source.outputs.source_sha }}
+            org.opencontainers.image.version=${{ steps.channel.outputs.version }}
             org.opencontainers.image.licenses=GPL-2.0-or-later
-          cache-from: type=gha,scope=patched-web
-          cache-to: type=gha,mode=max,scope=patched-web
+          cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
+          cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
           provenance: mode=max
           sbom: true
 
-      - name: Write deployment summary
+      - name: Write channel deployment summary
         env:
-          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          CHANNEL: ${{ matrix.channel }}
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
           UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
+          IMAGE: ${{ steps.publication.outputs.image }}
+          BUILT: ${{ steps.publication.outputs.build }}
+          BUILD_TAG: ${{ steps.publication.outputs.build_tag }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
         run: |
           {
-            echo '## Patched Jellyfin Web published'
-            echo "Upstream: \`$UPSTREAM_SHA\`"
-            echo "Patched source: \`$SOURCE_SHA\`"
-            echo 'Image: `ghcr.io/felixfoertsch/jellyfin-web:latest`'
-            echo "Immutable build tag: \`sha-$SOURCE_SHA-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\`"
-            echo 'Both latest and edge track upstream master, NOT the stable server release.'
+            echo "## Patched Jellyfin Web: $CHANNEL"
+            echo "Upstream: \`$UPSTREAM_REF\` at \`$UPSTREAM_SHA\`"
+            echo "Image: \`$IMAGE\`"
+            if [[ "$BUILT" == true ]]; then
+              echo "Build tag: \`$BUILD_TAG\`"
+              echo "Digest: \`$DIGEST\`"
+              [[ -z "$SOURCE_TAG" ]] || echo "Corresponding source Git tag: \`$SOURCE_TAG\`"
+            else
+              echo 'Already published: matching source tree, architectures and channel aliases. No rebuild needed.'
+            fi
+            echo 'latest/stable = official release + patch; nightly/edge = upstream master + patch.'
           } >> "$GITHUB_STEP_SUMMARY"
