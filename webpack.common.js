@@ -276,8 +276,7 @@ const config = {
                     {
                         loader: 'ts-loader',
                         options: {
-                            transpileOnly: true,
-                            compilerOptions: { sourceMap: DEV_MODE }
+                            transpileOnly: true
                         }
                     }
                 ]
@@ -288,8 +287,7 @@ const config = {
                 use: [{
                     loader: 'ts-loader',
                     options: {
-                        transpileOnly: true,
-                        compilerOptions: { sourceMap: DEV_MODE }
+                        transpileOnly: true
                     }
                 }]
             },

@@ -126,6 +126,7 @@ export const Component = () => {
                     <Tooltip disableInteractive title={globalize.translate('ButtonRemove')}>
                         <IconButton
                             color='error'
+                            // eslint-disable-next-line react/jsx-no-bind
                             onClick={() => onDeleteTrigger(row.original)}
                         >
                             <RemoveCircleIcon />

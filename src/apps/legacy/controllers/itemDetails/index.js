@@ -256,7 +256,7 @@ function renderVideoSelections(page, mediaSources) {
             titleParts.push(v.Codec.toUpperCase());
         }
 
-        return `<option value="${v.Index}" ${selected}>${escapeHtml(v.DisplayTitle || titleParts.join(' '))}</option>`;
+        return '<option value="' + v.Index + '" ' + selected + '>' + (v.DisplayTitle || titleParts.join(' ')) + '</option>';
     }).join('');
     select.setAttribute('disabled', 'disabled');
 
@@ -279,7 +279,7 @@ function renderAudioSelections(page, mediaSources) {
     const selectedId = mediaSource.DefaultAudioStreamIndex;
     select.innerHTML = tracks.map(function (v) {
         const selected = v.Index === selectedId ? ' selected' : '';
-        return `<option value="${v.Index}" ${selected}>${escapeHtml(v.DisplayTitle)}</option>`;
+        return '<option value="' + v.Index + '" ' + selected + '>' + v.DisplayTitle + '</option>';
     }).join('');
 
     if (tracks.length > 1) {
@@ -309,7 +309,7 @@ function renderSubtitleSelections(page, mediaSources) {
     let selected = selectedId === -1 ? ' selected' : '';
     select.innerHTML = '<option value="-1">' + globalize.translate('Off') + '</option>' + tracks.map(function (v) {
         selected = v.Index === selectedId ? ' selected' : '';
-        return `<option value="${v.Index}" ${selected}>${escapeHtml(v.DisplayTitle)}</option>`;
+        return '<option value="' + v.Index + '" ' + selected + '>' + v.DisplayTitle + '</option>';
     }).join('');
 
     if (tracks.length > 0) {
@@ -729,22 +729,12 @@ function renderLinks(page, item) {
     const links = [];
 
     if (!layoutManager.tv && item.HomePageUrl) {
-        try {
-            const parsedUrl = new URL(item.HomePageUrl);
-            links.push(`<a is="emby-linkbutton" class="button-link" href="${parsedUrl.href}" target="_blank">${globalize.translate('ButtonWebsite')}</a>`);
-        } catch {
-            console.error('[renderLinks] Failed to parse home page URL', item.HomePageUrl);
-        }
+        links.push(`<a is="emby-linkbutton" class="button-link" href="${item.HomePageUrl}" target="_blank">${globalize.translate('ButtonWebsite')}</a>`);
     }
 
     if (item.ExternalUrls) {
         for (const url of item.ExternalUrls) {
-            try {
-                const parsedUrl = new URL(url.Url);
-                links.push(`<a is="emby-linkbutton" class="button-link" href="${parsedUrl.href}" target="_blank">${escapeHtml(url.Name)}</a>`);
-            } catch {
-                console.error('[renderLinks] Failed to parse external URL', url.Url);
-            }
+            links.push(`<a is="emby-linkbutton" class="button-link" href="${url.Url}" target="_blank">${escapeHtml(url.Name)}</a>`);
         }
     }
 

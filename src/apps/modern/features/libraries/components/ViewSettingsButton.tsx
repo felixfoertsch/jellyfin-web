@@ -177,6 +177,7 @@ const ViewSettingsButton: FC<ViewSettingsButtonProps> = ({
                                 {imageTypesOptions.map((imageType) => (
                                     <MenuItem
                                         key={imageType.value}
+                                        // eslint-disable-next-line react/jsx-no-bind
                                         onClick={() => setImageType(imageType.value)}
                                     >
                                         <ListItemIcon>

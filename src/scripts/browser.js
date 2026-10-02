@@ -10,6 +10,10 @@ function isTv(userAgent) {
         return true;
     }
 
+    if (userAgent.includes('samsungbrowser')) {
+        return true;
+    }
+
     if (userAgent.includes('viera')) {
         return true;
     }
