@@ -1,0 +1,115 @@
+name: Patched Jellyfin Web
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: downstream-master
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  sync-test-publish:
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out the current fork
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the source-sync machinery
+        run: python3 -m unittest discover -s .downstream/tests -v
+
+      - name: Reconstruct upstream master plus our patch queue
+        id: source
+        run: python3 .downstream/sync-upstream.py
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build, run regression tests, and compile production assets
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .downstream/Dockerfile
+          platforms: linux/amd64
+          load: true
+          pull: true
+          tags: jellyfin-web-smoke:local
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
+            UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
+          cache-from: type=gha,scope=patched-web
+          cache-to: type=gha,mode=max,scope=patched-web
+
+      - name: Smoke-test static files, API routing, and WebSockets
+        run: bash .downstream/smoke-test.sh jellyfin-web-smoke:local
+
+      - name: Advance the fork only after tests and the image build succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
+        run: bash .downstream/push-source.sh
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish AMD64 and ARM64 images
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .downstream/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/felixfoertsch/jellyfin-web:latest
+            ghcr.io/felixfoertsch/jellyfin-web:edge
+            ghcr.io/felixfoertsch/jellyfin-web:sha-${{ steps.source.outputs.source_sha }}-run-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
+            UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/felixfoertsch/jellyfin-web
+            org.opencontainers.image.revision=${{ steps.source.outputs.source_sha }}
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+          cache-from: type=gha,scope=patched-web
+          cache-to: type=gha,mode=max,scope=patched-web
+          provenance: mode=max
+          sbom: true
+
+      - name: Write deployment summary
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
+        run: |
+          {
+            echo '## Patched Jellyfin Web published'
+            echo "Upstream: \`$UPSTREAM_SHA\`"
+            echo "Patched source: \`$SOURCE_SHA\`"
+            echo 'Image: `ghcr.io/felixfoertsch/jellyfin-web:latest`'
+            echo "Immutable build tag: \`sha-$SOURCE_SHA-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\`"
+            echo 'Both latest and edge track upstream master, NOT the stable server release.'
+          } >> "$GITHUB_STEP_SUMMARY"
