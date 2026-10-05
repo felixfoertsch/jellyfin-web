@@ -1,3 +1,10 @@
+# Patched Jellyfin Web
+
+Applied patches, oldest first:
+
+
+---
+
 <h1 align="center">Jellyfin Web</h1>
 <h3 align="center">Part of the <a href="https://jellyfin.org">Jellyfin Project</a></h3>
 
