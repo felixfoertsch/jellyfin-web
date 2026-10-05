@@ -1,0 +1,3 @@
+# Replay these exact reviewed changes; do not download moving PR diffs.
+0001-ask-to-skip-all-segments.patch
+0002-keep-safari-video-playback-background-black.patch
