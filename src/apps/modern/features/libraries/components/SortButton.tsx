@@ -237,6 +237,7 @@ const SortButton: FC<SortButtonProps> = ({
                         .map((option) => (
                             <MenuItem
                                 key={option.value.join(',')}
+                                // eslint-disable-next-line react/jsx-no-bind
                                 onClick={() => onMenuItemClick(option.value)}
                             >
                                 <ListItemText>

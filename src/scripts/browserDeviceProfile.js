@@ -526,7 +526,6 @@ export default function (options) {
     };
 
     let videoAudioCodecs = [];
-    let mkvAudioCodecs = [];
     let hlsInTsVideoAudioCodecs = [];
     let hlsInFmp4VideoAudioCodecs = [];
 
@@ -563,14 +562,12 @@ export default function (options) {
     // Prefer AAC, MP3 to other codecs when audio transcoding.
     if (canPlayAacVideoAudio) {
         videoAudioCodecs.push('aac');
-        mkvAudioCodecs.push('aac');
         hlsInTsVideoAudioCodecs.push('aac');
         hlsInFmp4VideoAudioCodecs.push('aac');
     }
 
     if (supportsMp3VideoAudio) {
         videoAudioCodecs.push('mp3');
-        mkvAudioCodecs.push('mp3');
     }
 
     // Safari supports mp3 with HLS, but only in mpegts container, and the supportsMp3VideoAudio will return false.
@@ -587,14 +584,12 @@ export default function (options) {
     // Do not use AC3 for audio transcoding unless AAC and MP3 are not supported.
     if (canPlayAc3VideoAudio) {
         videoAudioCodecs.push('ac3');
-        mkvAudioCodecs.push('ac3');
         if (browser.edgeChromium) {
             hlsInFmp4VideoAudioCodecs.push('ac3');
         }
 
         if (canPlayEac3VideoAudio) {
             videoAudioCodecs.push('eac3');
-            mkvAudioCodecs.push('eac3');
             if (browser.edgeChromium) {
                 hlsInFmp4VideoAudioCodecs.push('eac3');
             }
@@ -613,7 +608,6 @@ export default function (options) {
 
     if (supportsMp2VideoAudio) {
         videoAudioCodecs.push('mp2');
-        mkvAudioCodecs.push('mp2');
         hlsInTsVideoAudioCodecs.push('mp2');
         hlsInFmp4VideoAudioCodecs.push('mp2');
     }
@@ -626,37 +620,30 @@ export default function (options) {
     if (supportsDts) {
         videoAudioCodecs.push('dca');
         videoAudioCodecs.push('dts');
-        mkvAudioCodecs.push('dca', 'dts');
     }
 
     if (browser.tizen || browser.web0s) {
         videoAudioCodecs.push('pcm_s16le');
         videoAudioCodecs.push('pcm_s24le');
-        mkvAudioCodecs.push('pcm_s16le', 'pcm_s24le');
     }
 
     if (appSettings.enableTrueHd() || options.supportsTrueHd) {
         videoAudioCodecs.push('truehd');
-        mkvAudioCodecs.push('truehd');
     }
 
     if (browser.tizen) {
         videoAudioCodecs.push('aac_latm');
-        mkvAudioCodecs.push('aac_latm');
     }
 
     if (canPlayAudioFormat('opus')) {
-        // On Tizen 3/4/5, OPUS is supported only in MKV/WebM
-        // On Tizen 6, OPUS appears to be supported in MP4 as well, but not in TS (that requires refactoring of TS profile generation)
-        if (!browser.tizen) {
-            videoAudioCodecs.push('opus');
-        }
-        mkvAudioCodecs.push('opus');
+        videoAudioCodecs.push('opus');
         webmAudioCodecs.push('opus');
+        if (browser.tizen) {
+            hlsInTsVideoAudioCodecs.push('opus');
+        }
         hlsInFmp4VideoAudioCodecs.push('opus');
     } else if (safariSupportsOpus) {
         videoAudioCodecs.push('opus');
-        mkvAudioCodecs.push('opus');
         webmAudioCodecs.push('opus');
         hlsInFmp4VideoAudioCodecs.push('opus');
     }
@@ -664,21 +651,17 @@ export default function (options) {
     // FLAC audio in video plays with a delay on Tizen
     if (canPlayAudioFormat('flac') && !browser.tizen) {
         videoAudioCodecs.push('flac');
-        mkvAudioCodecs.push('flac');
         hlsInFmp4VideoAudioCodecs.push('flac');
     }
 
     if (canPlayAudioFormat('alac')) {
         videoAudioCodecs.push('alac');
-        mkvAudioCodecs.push('alac');
         hlsInFmp4VideoAudioCodecs.push('alac');
     }
 
     videoAudioCodecs = videoAudioCodecs.filter(function (c) {
         return (options.disableVideoAudioCodecs || []).indexOf(c) === -1;
     });
-
-    mkvAudioCodecs = mkvAudioCodecs.filter(c => !(options.disableVideoAudioCodecs || []).includes(c));
 
     hlsInTsVideoAudioCodecs = hlsInTsVideoAudioCodecs.filter(function (c) {
         return (options.disableHlsVideoAudioCodecs || []).indexOf(c) === -1;
@@ -767,7 +750,6 @@ export default function (options) {
 
     if ((!browser.safari && canPlayVp8) || browser.tizen) {
         videoAudioCodecs.push('vorbis');
-        mkvAudioCodecs.push('vorbis');
     }
 
     if (webmVideoCodecs.length) {
@@ -793,7 +775,7 @@ export default function (options) {
             Container: 'mkv',
             Type: 'Video',
             VideoCodec: mp4VideoCodecs.join(','),
-            AudioCodec: mkvAudioCodecs.join(',')
+            AudioCodec: videoAudioCodecs.join(',')
         });
     }
 
