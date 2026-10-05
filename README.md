@@ -4,6 +4,7 @@ This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-w
 
 Applied patches, oldest first:
 
+1. [Make all media segment skip prompts discoverable by default](https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/0001-ask-to-skip-all-segments.patch)
 
 ---
 
