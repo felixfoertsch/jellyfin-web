@@ -2,6 +2,7 @@
 
 Applied patches, oldest first:
 
+- [Make all media segment skip prompts discoverable by default](.downstream/patches/0001-ask-to-skip-all-segments.patch)
 
 ---
 
