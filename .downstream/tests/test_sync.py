@@ -78,8 +78,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
         self.assertEqual((self.fork / 'new.txt').read_text(), 'new source\n')
         self.assertFalse((self.fork / 'removed-next-release.txt').exists())
-        self.assertEqual(sorted(p.name for p in (self.fork / '.github/workflows').iterdir()),
-                         ['downstream.yml'])
+        self.assertFalse((self.fork / '.github/workflows').exists())
         self.assertEqual((self.fork / '.downstream/keep.txt').read_text(), 'local tooling\n')
         self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '2')
         self.assertEqual(git(self.fork, 'rev-parse', 'HEAD~2'), upstream)

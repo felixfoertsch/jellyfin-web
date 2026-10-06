@@ -2,7 +2,7 @@ name: Patched Jellyfin Web
 
 on:
   push:
-    branches: [main, automation]
+    branches: [automation]
   schedule:
     # Fastest GitHub-hosted schedule; not an upstream webhook or timing SLA.
     - cron: '2-59/5 * * * *'

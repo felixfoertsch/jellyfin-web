@@ -64,7 +64,7 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             # source MUST be freshly reconstructed upstream + the entire queue.
             git(candidate, 'rm', '-r', '--ignore-unmatch', '.github/workflows')
             git(candidate, 'restore', '--source=' + base, '--staged', '--worktree',
-                '--', '.downstream', '.github/workflows')
+                '--', '.downstream')
             config['ref'] = ref
             config['commit'] = upstream
             (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
