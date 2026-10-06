@@ -29,20 +29,22 @@ fork's `.downstream/` and `.github/workflows/`, then strictly replays every patc
 listed in `.downstream/series`. An ordinary automatic merge's file resolution is
 not used: old fork edits cannot silently survive outside the patch queue.
 
-Successful nightly synchronization records the previous fork head as first parent
-and the selected upstream head as second parent when it is not already an
-ancestor. This preserves both histories and permits a normal fast-forward push
-without force. It also repairs the previous snapshot-only ancestry, even when the
-source files are already identical. The sync verifies that upstream is an
-ancestor and has **zero commits missing** from the candidate before publication.
-After successful catch-up, GitHub should show the fork ahead and **zero behind**
-that upstream revision. A later upstream push can make it behind again.
+`main` is the default branch: upstream master plus **one tooling commit and one
+commit per applied patch**. `automation` owns maintained tooling and the patch
+queue. The default branch's scheduled workflow checks out `automation`, rebuilds
+the stack from upstream, validates it, then replaces `main` using an explicit
+force-with-lease. No previous fork head or sync merge is retained in the stack.
+Already-upstream patches are skipped. Stable commit metadata makes identical
+replays produce identical commits.
+
+After successful catch-up, `main` is **1 + applied patches ahead, zero behind**
+upstream master. Later upstream pushes or failed checks can leave it behind until
+the next successful run. Edit tooling and patches on `automation`, not `main`.
 
 Release source is reconstructed from the **exact official release tag**, including
 peeling annotated tags. It is preserved under a unique
-`downstream-release-v<version>-<source-sha>` Git tag; it never replaces master.
-Although a release-source commit may retain fork history as ancestry, its files
-are the selected release plus patches, not development files from its parent.
+`downstream-release-v<version>-<source-sha>` Git tag; it never replaces main.
+Release history is also the selected release plus tooling and applied patches.
 
 Only `.downstream/` and `.github/workflows/` are maintained directly. Other edits
 must be made as patch files and listed in `.downstream/series`, or the next sync
@@ -51,7 +53,7 @@ installed in the fork's executable workflow tree.
 
 ## Detection and publication
 
-`.github/workflows/downstream.yml` runs on master pushes, manual dispatch,
+`.github/workflows/downstream.yml` runs on main/automation pushes, manual dispatch,
 `repository_dispatch` of type `upstream-updated`, and a best-effort **five-minute
 poll** (`2-59/5 * * * *`, UTC). Both channels run independently with fail-fast
 disabled. Workflow concurrency serializes publishers and coalesces pending
@@ -74,9 +76,9 @@ Each channel:
 6. Builds and uploads an AMD64/ARM64 candidate under a unique source/run tag, with
    provenance and SBOM. **No rolling tag or success marker moves at this stage.**
 7. Rechecks the selected upstream ref and commit after the build. If upstream
-   moved, it leaves master and rolling tags untouched and requests an immediate
+   moved, it leaves main and rolling tags untouched and requests an immediate
    catch-up workflow through `repository_dispatch`.
-8. If still current, publishes validated source (nightly master or release source
+8. If still current, publishes validated source (nightly main or release source
    tag), then promotes the already-built index **by digest**, without another
    compilation, to that channel's aliases and success marker. Promotion verifies
    both architectures and checks every resulting alias.
@@ -126,7 +128,8 @@ References:
   Select **Patched Jellyfin Web -> Run workflow** to check both channels immediately.
 - Jobs request `contents: write` and `packages: write`, including source updates,
   release-source tags and internal dispatches. Repository policies must permit
-  direct master updates and the merge commits used to retain upstream ancestry.
+  lease-protected force-pushes to main. Keep main as the default branch and
+  automation as the maintained tooling branch.
   Changes to trusted workflow files themselves must be made by a permitted user
   or app, not by the scheduled source-sync job.
 - Both channels belong to the existing `jellyfin-web` package. Make that package

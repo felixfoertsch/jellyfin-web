@@ -2,7 +2,7 @@ name: Patched Jellyfin Web
 
 on:
   push:
-    branches: [master]
+    branches: [main, automation]
   schedule:
     # Fastest GitHub-hosted schedule; not an upstream webhook or timing SLA.
     - cron: '2-59/5 * * * *'
@@ -30,7 +30,7 @@ env:
 jobs:
   sync-test-publish:
     name: Build and publish ${{ matrix.channel }}
-    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/master'
+    if: github.repository == 'felixfoertsch/jellyfin-web' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/automation')
     strategy:
       fail-fast: false
       matrix:
@@ -44,12 +44,18 @@ jobs:
       - name: Check out the current fork tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: master
+          ref: automation
           fetch-depth: 0
           persist-credentials: false
 
       - name: Test ancestry, patch replay, channel isolation and freshness gates
         run: python3 -m unittest discover -s .downstream/tests -v
+
+      - name: Capture publication leases
+        id: leases
+        run: |
+          echo "main_sha=$(git ls-remote origin refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "automation_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Resolve official release or upstream master
         id: channel
@@ -133,6 +139,11 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Reject changed automation tooling
+        env:
+          EXPECTED_AUTOMATION: ${{ steps.leases.outputs.automation_sha }}
+        run: test "$(git ls-remote origin refs/heads/automation | cut -f1)" = "$EXPECTED_AUTOMATION"
+
       - name: Reject superseded source and request a catch-up run
         id: freshness
         env:
@@ -141,11 +152,12 @@ jobs:
           UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
         run: python3 .downstream/freshness.py '${{ matrix.channel }}' --dispatch-if-changed
 
-      - name: Advance master only with current validated nightly source
+      - name: Replace main with current validated upstream plus patch stack
         if: matrix.channel == 'nightly' && steps.freshness.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
+          EXPECTED_BASE: ${{ steps.leases.outputs.main_sha }}
+          EXPECTED_AUTOMATION: ${{ steps.leases.outputs.automation_sha }}
           EXPECTED_UPSTREAM: ${{ steps.source.outputs.upstream_sha }}
         run: |
           git merge-base --is-ancestor "$EXPECTED_UPSTREAM" HEAD

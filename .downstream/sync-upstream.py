@@ -43,7 +43,19 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
     if git(root, 'ls-tree', upstream, '--', '.downstream').stdout.strip():
         raise RuntimeError('Upstream now owns .downstream; reconcile this reserved path manually.')
     source = base
-    needs_ancestry = not is_ancestor(root, upstream, base)
+    # Stable metadata makes unchanged replay produce identical commit IDs.
+    timestamp = git(root, 'show', '-s', '--format=%cI', upstream).stdout.strip()
+    commit_env = {**os.environ, 'GIT_AUTHOR_DATE': timestamp, 'GIT_COMMITTER_DATE': timestamp}
+
+    def record(candidate: Path, message: str) -> str:
+        result = subprocess.run(
+            ['git', '-C', str(candidate), '-c', 'commit.gpgsign=false',
+             '-c', 'user.name=github-actions[bot]',
+             '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+             'commit', '-m', message], env=commit_env, text=True, capture_output=True)
+        if result.returncode:
+            raise RuntimeError(f'Cannot record patch stack:\n{result.stderr}')
+        return git(candidate, 'rev-parse', 'HEAD').stdout.strip()
     with tempfile.TemporaryDirectory(prefix='jellyfin-web-sync-') as directory:
         candidate = Path(directory) / 'candidate'
         git(root, 'worktree', 'add', '--detach', str(candidate), upstream)
@@ -53,6 +65,11 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             git(candidate, 'rm', '-r', '--ignore-unmatch', '.github/workflows')
             git(candidate, 'restore', '--source=' + base, '--staged', '--worktree',
                 '--', '.downstream', '.github/workflows')
+            config['ref'] = ref
+            config['commit'] = upstream
+            (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
+            git(candidate, 'add', '--all')
+            source = record(candidate, 'Maintain downstream tooling and publication workflow')
             for entry in (candidate / '.downstream/series').read_text().splitlines():
                 name = entry.split('#', 1)[0].strip()
                 if not name:
@@ -65,31 +82,15 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                 forward = git(candidate, 'apply', '--index', '--check', str(patch), check=False)
                 if forward.returncode == 0:
                     git(candidate, 'apply', '--index', '--whitespace=error-all', str(patch))
+                    source = record(candidate, f'Apply downstream patch: {name}')
                     print(f'Applied {name}', flush=True)
                 elif git(candidate, 'apply', '--index', '--reverse', '--check', str(patch), check=False).returncode == 0:
                     print(f'Already present upstream: {name}', flush=True)
                 else:
                     raise RuntimeError(f'Patch no longer applies: {name}\n{forward.stderr}'
                                        'No source branch or image was published.')
-            config['ref'] = ref
-            config['commit'] = upstream
-            (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
-            git(candidate, 'add', '--all')
-            tree = git(candidate, 'write-tree').stdout.strip()
-            if needs_ancestry or tree != git(root, 'rev-parse', base + '^{tree}').stdout.strip():
-                # Preserve the old fork as first parent (normal fast-forward push)
-                # and connect real upstream history, even for identical trees.
-                # This also repairs forks previously synchronized by snapshots.
-                parents = ['-p', base]
-                if needs_ancestry:
-                    parents += ['-p', upstream]
-                source = git(candidate, '-c', 'user.name=github-actions[bot]',
-                             '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
-                             'commit-tree', tree, *parents, '-m',
-                             f'Sync upstream {ref} at {upstream[:12]}; replay downstream patches\n\n'
-                             f'Upstream-Commit: {upstream}').stdout.strip()
-            if not is_ancestor(root, upstream, source) or not is_ancestor(root, base, source):
-                raise RuntimeError('Refusing source that loses upstream or fork ancestry.')
+            if not is_ancestor(root, upstream, source):
+                raise RuntimeError('Refusing source that loses upstream ancestry.')
         finally:
             git(root, 'worktree', 'remove', '--force', str(candidate))
     if source != base:

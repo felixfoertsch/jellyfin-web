@@ -16,7 +16,8 @@ spec.loader.exec_module(module)
 
 
 def git(root: Path, *args: str) -> str:
-    return module.git(root, *args).stdout.strip()
+    return module.git(root, '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false',
+                      *args).stdout.strip()
 
 
 def write(root: Path, name: str, text: str) -> None:
@@ -80,8 +81,9 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.fork / '.github/workflows').iterdir()),
                          ['downstream.yml'])
         self.assertEqual((self.fork / '.downstream/keep.txt').read_text(), 'local tooling\n')
-        self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
-                         [self.base, upstream])
+        self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '2')
+        self.assertEqual(git(self.fork, 'rev-parse', 'HEAD~2'), upstream)
+        self.assertFalse(module.is_ancestor(self.fork, self.base, 'HEAD'))
         self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
         self.assertEqual(git(self.fork, 'status', '--porcelain'), '')
 
@@ -95,8 +97,9 @@ class SyncTests(unittest.TestCase):
         self.sync()
         write(self.up, 'setting.txt', 'default=ask\n')
         commit(self.up, 'Adopt downstream behavior')
-        self.sync()
+        result = self.sync()
         self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
+        self.assertEqual(git(self.fork, 'rev-list', '--count', result['upstream_sha'] + '..HEAD'), '1')
 
     def test_conflict_leaves_fork_unchanged(self) -> None:
         write(self.up, 'setting.txt', 'upstream rewrote this feature\n')
@@ -138,8 +141,8 @@ class SyncTests(unittest.TestCase):
         result = self.sync()
         self.assertEqual(result['source_tree'], first['source_tree'])
         self.assertNotEqual(result['source_sha'], snapshot)
-        self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
-                         [snapshot, upstream])
+        self.assertEqual(git(self.fork, 'rev-parse', 'HEAD~2'), upstream)
+        self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '2')
         self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
         self.assertEqual(self.sync()['source_sha'], result['source_sha'])
 
@@ -149,7 +152,8 @@ class SyncTests(unittest.TestCase):
             write(self.up, 'new.txt', f'upstream {number}\n')
             upstream = commit(self.up, f'Upstream {number}')
             result = self.sync()
-            self.assertTrue(module.is_ancestor(self.fork, previous, result['source_sha']))
+            self.assertFalse(module.is_ancestor(self.fork, previous, result['source_sha']))
+            self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '2')
             self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
             self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
             previous = result['source_sha']
@@ -165,8 +169,9 @@ class SyncTests(unittest.TestCase):
 
     def test_existing_upstream_ancestor_does_not_create_redundant_merge_parent(self) -> None:
         self.sync()
-        self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
-                         [self.base])
+        upstream = git(self.up, 'rev-parse', 'HEAD')
+        self.assertEqual(git(self.fork, 'rev-parse', 'HEAD~2'), upstream)
+        self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '2')
 
     def test_ref_is_annotated_release_tag_not_newer_master(self) -> None:
         write(self.up, 'new.txt', 'release\n')

@@ -31,7 +31,7 @@ class ReleaseSyncTests(unittest.TestCase):
         module.sync(self.fork, upstream_ref='refs/heads/master')
         second = module.sync(self.fork, upstream_ref='refs/tags/v12.1')
         self.assertEqual(first['source_tree'], second['source_tree'])
-        self.assertNotEqual(first['source_sha'], second['source_sha'])
+        self.assertEqual(first['source_sha'], second['source_sha'])
 
     def test_switching_back_to_nightly_restores_master_metadata(self) -> None:
         git(self.up, 'tag', 'v12.1')
