@@ -98,12 +98,13 @@ class SyncTests(unittest.TestCase):
         tooling = git(self.fork, 'show', 'HEAD~2:README.md')
         first = git(self.fork, 'show', 'HEAD~1:README.md')
         second = git(self.fork, 'show', 'HEAD:README.md')
-        self.assertTrue(tooling.startswith('# Patched Jellyfin Web'))
-        self.assertNotIn('- [', tooling)
-        self.assertIn('- [settings.patch]', first)
+        self.assertTrue(tooling.startswith('This fork follows upstream [Jellyfin Web]'))
+        self.assertNotIn('1. [', tooling)
+        self.assertIn('1. [settings.patch]', first)
         self.assertNotIn('Second behavior', first)
-        self.assertLess(second.index('- [settings.patch]'), second.index('- [Second behavior]'))
-        self.assertTrue(second.endswith('# Upstream README'))
+        self.assertLess(second.index('1. [settings.patch]'), second.index('2. [Second behavior]'))
+        self.assertEqual((self.fork / 'README.md').read_text().split('\n---\n\n', 1)[1], '# Upstream README\n')
+        self.assertIn('https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/', second)
         self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '3')
 
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:

@@ -73,7 +73,8 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             patch_items: list[str] = []
 
             def update_readme() -> None:
-                readme.write_text('# Patched Jellyfin Web\n\n'
+                readme.write_text('This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) and applies patches below in order. `automation` owns patches and workflows; generated `main` contains upstream source plus these patches. Nightly builds follow upstream default branch; stable builds follow upstream releases.\n\n'
+                                  '# Patched Jellyfin Web\n\n'
                                   'Applied patches, oldest first:\n\n'
                                   + ''.join(patch_items) + '\n---\n\n' + upstream_readme)
                 git(candidate, 'add', '--', 'README.md')
@@ -96,7 +97,7 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                     subject = next((line.removeprefix('Subject: ').strip()
                                     for line in patch.read_text().splitlines()
                                     if line.startswith('Subject: ')), name)
-                    patch_items.append(f'- [{subject}](.downstream/patches/{name})\n')
+                    patch_items.append(f'{len(patch_items) + 1}. [{subject}](https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/{name})\n')
                     update_readme()
                     source = record(candidate, f'Apply downstream patch: {name}')
                     print(f'Applied {name}', flush=True)
