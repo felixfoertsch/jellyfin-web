@@ -35,7 +35,10 @@ queue. The default branch's scheduled workflow checks out `automation`, rebuilds
 the stack from upstream, validates it, then replaces `main` using an explicit
 force-with-lease. No previous fork head or sync merge is retained in the stack.
 Already-upstream patches are skipped. Stable commit metadata makes identical
-replays produce identical commits.
+replays produce identical commits. The tooling commit prepends the root README
+headline; each applied patch commit adds its own list item, in series order
+(oldest first), using its `Subject:` or filename. Upstream README content follows
+unchanged. Already-upstream patches do not appear in the applied list.
 
 After successful catch-up, `main` is **1 + applied patches ahead, zero behind**
 upstream master. Later upstream pushes or failed checks can leave it behind until

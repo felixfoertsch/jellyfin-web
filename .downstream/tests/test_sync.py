@@ -87,6 +87,26 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
         self.assertEqual(git(self.fork, 'status', '--porcelain'), '')
 
+    def test_readme_items_belong_to_each_patch_commit_in_queue_order(self) -> None:
+        write(self.up, 'README.md', '# Upstream README\n')
+        upstream = commit(self.up, 'Add README')
+        write(self.fork, '.downstream/series', 'settings.patch\nsecond.patch\n')
+        diff = ''.join(difflib.unified_diff(['default=ask\n'], ['default=skip\n'],
+                       fromfile='a/setting.txt', tofile='b/setting.txt'))
+        write(self.fork, '.downstream/patches/second.patch', 'Subject: Second behavior\n\n' + diff)
+        commit(self.fork, 'Add second patch')
+        self.sync()
+        tooling = git(self.fork, 'show', 'HEAD~2:README.md')
+        first = git(self.fork, 'show', 'HEAD~1:README.md')
+        second = git(self.fork, 'show', 'HEAD:README.md')
+        self.assertTrue(tooling.startswith('# Patched Jellyfin Web'))
+        self.assertNotIn('- [', tooling)
+        self.assertIn('- [settings.patch]', first)
+        self.assertNotIn('Second behavior', first)
+        self.assertLess(second.index('- [settings.patch]'), second.index('- [Second behavior]'))
+        self.assertTrue(second.endswith('# Upstream README'))
+        self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '3')
+
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:
         first = self.sync()
         second = self.sync()

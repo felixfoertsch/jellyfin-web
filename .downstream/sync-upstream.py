@@ -68,6 +68,17 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             config['ref'] = ref
             config['commit'] = upstream
             (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
+            readme = candidate / 'README.md'
+            upstream_readme = readme.read_text() if readme.exists() else ''
+            patch_items: list[str] = []
+
+            def update_readme() -> None:
+                readme.write_text('# Patched Jellyfin Web\n\n'
+                                  'Applied patches, oldest first:\n\n'
+                                  + ''.join(patch_items) + '\n---\n\n' + upstream_readme)
+                git(candidate, 'add', '--', 'README.md')
+
+            update_readme()
             git(candidate, 'add', '--all')
             source = record(candidate, 'Maintain downstream tooling and publication workflow')
             for entry in (candidate / '.downstream/series').read_text().splitlines():
@@ -82,6 +93,11 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                 forward = git(candidate, 'apply', '--index', '--check', str(patch), check=False)
                 if forward.returncode == 0:
                     git(candidate, 'apply', '--index', '--whitespace=error-all', str(patch))
+                    subject = next((line.removeprefix('Subject: ').strip()
+                                    for line in patch.read_text().splitlines()
+                                    if line.startswith('Subject: ')), name)
+                    patch_items.append(f'- [{subject}](.downstream/patches/{name})\n')
+                    update_readme()
                     source = record(candidate, f'Apply downstream patch: {name}')
                     print(f'Applied {name}', flush=True)
                 elif git(candidate, 'apply', '--index', '--reverse', '--check', str(patch), check=False).returncode == 0:
