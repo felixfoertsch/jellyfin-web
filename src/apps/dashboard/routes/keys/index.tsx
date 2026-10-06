@@ -94,6 +94,7 @@ export const Component = () => {
                     <Tooltip title={globalize.translate('ButtonRevoke')}>
                         <IconButton
                             color='error'
+                            // eslint-disable-next-line react/jsx-no-bind
                             onClick={() => row.original?.AccessToken && onRevokeKey(row.original.AccessToken)}
                         >
                             <DeleteIcon />
