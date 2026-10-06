@@ -4,7 +4,10 @@ on:
   push:
     branches: [master]
   schedule:
-    - cron: '17 * * * *'
+    # Fastest GitHub-hosted schedule; not an upstream webhook or timing SLA.
+    - cron: '2-59/5 * * * *'
+  repository_dispatch:
+    types: [upstream-updated]
   workflow_dispatch:
     inputs:
       rebuild:
@@ -12,7 +15,8 @@ on:
         type: boolean
         default: false
 
-# Retain the original group so old and new publishers cannot overlap.
+# Coalesce wake-ups, but never cancel a running publisher halfway through.
+# Retain the old group so legacy and new publishers cannot overlap.
 concurrency:
   group: downstream-master
   cancel-in-progress: false
@@ -44,16 +48,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Test source synchronization and channel isolation
+      - name: Test ancestry, patch replay, channel isolation and freshness gates
         run: python3 -m unittest discover -s .downstream/tests -v
 
       - name: Resolve official release or upstream master
         id: channel
         env:
           GH_TOKEN: ${{ github.token }}
+        # Dispatch payloads are deliberately ignored: only fixed upstream refs.
         run: python3 .downstream/channels.py resolve '${{ matrix.channel }}'
 
-      - name: Reconstruct the selected upstream source plus our patch queue
+      - name: Reconstruct upstream plus patches and preserve upstream ancestry
         id: source
         env:
           UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
@@ -103,30 +108,16 @@ jobs:
         if: steps.publication.outputs.build == 'true'
         run: bash .downstream/smoke-test.sh jellyfin-web-smoke:local
 
-      - name: Advance master only with validated nightly source
-        if: matrix.channel == 'nightly'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
-        run: bash .downstream/push-source.sh
-
-      - name: Preserve validated release source under its own Git tag
-        if: matrix.channel == 'release' && steps.publication.outputs.build == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
-        run: bash .downstream/push-release-source.sh
-
-      - name: Publish AMD64 and ARM64 images for this channel only
+      - name: Build and upload candidate without moving rolling tags
         if: steps.publication.outputs.build == 'true'
-        id: publish
+        id: candidate
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: .downstream/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.publication.outputs.tags }}
+          tags: ${{ steps.publication.outputs.candidate_image }}
           build-args: |
             SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
             UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
@@ -142,6 +133,48 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Reject superseded source and request a catch-up run
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
+        run: python3 .downstream/freshness.py '${{ matrix.channel }}' --dispatch-if-changed
+
+      - name: Advance master only with current validated nightly source
+        if: matrix.channel == 'nightly' && steps.freshness.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
+          EXPECTED_UPSTREAM: ${{ steps.source.outputs.upstream_sha }}
+        run: |
+          git merge-base --is-ancestor "$EXPECTED_UPSTREAM" HEAD
+          test "$(git rev-list --count "HEAD..$EXPECTED_UPSTREAM")" = 0
+          bash .downstream/push-source.sh
+
+      - name: Preserve current validated release source under its own Git tag
+        if: matrix.channel == 'release' && steps.publication.outputs.build == 'true' && steps.freshness.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
+        run: bash .downstream/push-release-source.sh
+
+      - name: Promote the built digest to this channel only
+        if: steps.publication.outputs.build == 'true' && steps.freshness.outputs.current == 'true'
+        env:
+          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          PUBLICATION_MARKER: ${{ steps.publication.outputs.marker }}
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: python3 .downstream/channels.py promote '${{ matrix.channel }}'
+
+      - name: Check again after publication and immediately request catch-up if needed
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
+        run: python3 .downstream/freshness.py '${{ matrix.channel }}' --dispatch-if-changed
+
       - name: Write channel deployment summary
         env:
           CHANNEL: ${{ matrix.channel }}
@@ -150,19 +183,23 @@ jobs:
           IMAGE: ${{ steps.publication.outputs.image }}
           BUILT: ${{ steps.publication.outputs.build }}
           BUILD_TAG: ${{ steps.publication.outputs.build_tag }}
-          DIGEST: ${{ steps.publish.outputs.digest }}
+          DIGEST: ${{ steps.candidate.outputs.digest }}
           SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
+          CURRENT: ${{ steps.freshness.outputs.current }}
         run: |
           {
             echo "## Patched Jellyfin Web: $CHANNEL"
             echo "Upstream: \`$UPSTREAM_REF\` at \`$UPSTREAM_SHA\`"
             echo "Image: \`$IMAGE\`"
-            if [[ "$BUILT" == true ]]; then
+            if [[ "$CURRENT" != true ]]; then
+              echo 'Upstream moved during this run. No source/rolling-tag promotion; catch-up requested.'
+            elif [[ "$BUILT" == true ]]; then
               echo "Build tag: \`$BUILD_TAG\`"
               echo "Digest: \`$DIGEST\`"
               [[ -z "$SOURCE_TAG" ]] || echo "Corresponding source Git tag: \`$SOURCE_TAG\`"
             else
-              echo 'Already published: matching source tree, architectures and channel aliases. No rebuild needed.'
+              echo 'Already published: matching source tree, architectures and channel aliases. Ancestry checked.'
             fi
-            echo 'latest/stable = official release + patch; nightly/edge = upstream master + patch.'
+            echo 'latest/stable = official release tag + patches; nightly/edge = upstream master + patches.'
+            echo 'Five-minute polling is best-effort. Dispatch events are wake-ups, not alternate source instructions.'
           } >> "$GITHUB_STEP_SUMMARY"

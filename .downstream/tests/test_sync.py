@@ -81,7 +81,8 @@ class SyncTests(unittest.TestCase):
                          ['downstream.yml'])
         self.assertEqual((self.fork / '.downstream/keep.txt').read_text(), 'local tooling\n')
         self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
-                         [self.base])
+                         [self.base, upstream])
+        self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
         self.assertEqual(git(self.fork, 'status', '--porcelain'), '')
 
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:
@@ -124,6 +125,67 @@ class SyncTests(unittest.TestCase):
             self.sync()
         self.assertEqual((self.fork / 'setting.txt').read_text(), 'my uncommitted work\n')
         self.assertEqual(git(self.fork, 'rev-parse', 'HEAD'), self.base)
+
+    def test_repairs_snapshot_ancestry_even_with_identical_source_tree(self) -> None:
+        write(self.up, 'new.txt', 'already copied by old snapshot sync\n')
+        upstream = commit(self.up, 'New upstream')
+        first = self.sync()
+        # Simulate the previous tool: identical result, but only a fork parent.
+        snapshot = git(self.fork, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                       'commit-tree', first['source_tree'], '-p', self.base, '-m', 'Old snapshot')
+        git(self.fork, 'reset', '--hard', snapshot)
+        self.assertFalse(module.is_ancestor(self.fork, upstream, snapshot))
+        result = self.sync()
+        self.assertEqual(result['source_tree'], first['source_tree'])
+        self.assertNotEqual(result['source_sha'], snapshot)
+        self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
+                         [snapshot, upstream])
+        self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
+        self.assertEqual(self.sync()['source_sha'], result['source_sha'])
+
+    def test_repeated_updates_always_have_zero_missing_upstream_commits(self) -> None:
+        previous = self.base
+        for number in range(3):
+            write(self.up, 'new.txt', f'upstream {number}\n')
+            upstream = commit(self.up, f'Upstream {number}')
+            result = self.sync()
+            self.assertTrue(module.is_ancestor(self.fork, previous, result['source_sha']))
+            self.assertEqual(git(self.fork, 'rev-list', '--count', 'HEAD..' + upstream), '0')
+            self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
+            previous = result['source_sha']
+
+    def test_upstream_workflow_changes_are_in_history_not_executed_tree(self) -> None:
+        write(self.up, '.github/workflows/vendor.yml', 'changed upstream deployment\n')
+        upstream = commit(self.up, 'Upstream CI change')
+        self.sync()
+        self.assertTrue(module.is_ancestor(self.fork, upstream, 'HEAD'))
+        self.assertFalse((self.fork / '.github/workflows/vendor.yml').exists())
+        self.assertEqual(git(self.fork, 'show', upstream + ':.github/workflows/vendor.yml'),
+                         'changed upstream deployment')
+
+    def test_existing_upstream_ancestor_does_not_create_redundant_merge_parent(self) -> None:
+        self.sync()
+        self.assertEqual(git(self.fork, 'rev-list', '--parents', '-n', '1', 'HEAD').split()[1:],
+                         [self.base])
+
+    def test_ref_is_annotated_release_tag_not_newer_master(self) -> None:
+        write(self.up, 'new.txt', 'release\n')
+        release = commit(self.up, 'Release')
+        git(self.up, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+            'tag', '-a', 'v1.2', '-m', 'Release')
+        write(self.up, 'new.txt', 'unreleased\n')
+        commit(self.up, 'Development after release')
+        result = module.sync(self.fork, upstream_ref='refs/tags/v1.2')
+        self.assertEqual(result['upstream_sha'], release)
+        self.assertTrue(module.is_ancestor(self.fork, release, result['source_sha']))
+        self.assertEqual((self.fork / 'new.txt').read_text(), 'release\n')
+        self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
+
+    def test_unlisted_source_edits_cannot_leak_into_reconstructed_source(self) -> None:
+        write(self.fork, 'unlisted.txt', 'not a reviewed patch\n')
+        commit(self.fork, 'Ad hoc edit')
+        self.sync()
+        self.assertFalse((self.fork / 'unlisted.txt').exists())
 
 
 if __name__ == '__main__':

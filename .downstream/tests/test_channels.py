@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 spec = importlib.util.spec_from_file_location('channels', Path(__file__).resolve().parents[1] / 'channels.py')
 module = importlib.util.module_from_spec(spec)
@@ -97,6 +97,47 @@ class ChannelTests(unittest.TestCase):
     def test_registry_error_causes_retry_not_silent_success(self):
         with patch.object(module.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'docker')):
             self.assertIsNone(module.inspect_digest('test:tag'))
+
+    def test_candidate_never_contains_a_rolling_alias(self):
+        for channel in ['nightly', 'release']:
+            result = self.plan(channel)
+            self.assertEqual(result['candidate_image'], module.IMAGE + ':' + result['build_tag'])
+            self.assertNotIn('\n', result['candidate_image'])
+
+    def test_promotion_uses_candidate_digest_without_rebuild(self):
+        digest = 'sha256:' + 'a' * 64
+        for channel, version in [('nightly', 'nightly'), ('release', '12.1')]:
+            run = Mock()
+            marker = self.plan(channel)['marker']
+            module.promote(channel, version, marker, digest, inspect=lambda _: digest, run=run)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:4], ['docker', 'buildx', 'imagetools', 'create'])
+            self.assertEqual(command[-1], module.IMAGE + '@' + digest)
+            promoted = [command[i + 1] for i, arg in enumerate(command) if arg == '--tag']
+            expected = [module.IMAGE + ':' + tag for tag in [*module.aliases(channel, version), marker]]
+            self.assertEqual(promoted, expected)
+
+    def test_promotion_rejects_cross_channel_marker_or_mutable_source(self):
+        for marker, digest in [(self.plan('nightly')['marker'], 'sha256:' + 'a' * 64),
+                               (self.plan()['marker'], 'latest')]:
+            run = Mock()
+            with self.assertRaises(ValueError):
+                module.promote('release', '12.1', marker, digest, run=run)
+            run.assert_not_called()
+
+    def test_promotion_rejects_incomplete_architecture_index(self):
+        run = Mock()
+        with self.assertRaises(RuntimeError):
+            module.promote('release', '12.1', self.plan()['marker'], 'sha256:' + 'a' * 64,
+                           inspect=lambda _: None, run=run)
+        run.assert_not_called()
+
+    def test_incomplete_alias_promotion_fails_for_retry(self):
+        digest = 'sha256:' + 'a' * 64
+        with self.assertRaisesRegex(RuntimeError, 'Incomplete'):
+            module.promote('release', '12.1', self.plan()['marker'], digest,
+                           inspect=lambda ref: None if ref.endswith(':stable') else digest,
+                           run=Mock())
 
 
 if __name__ == '__main__':
