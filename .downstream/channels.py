@@ -94,8 +94,30 @@ def plan(channel: str, version: str, source: str, tree: str, run_id: str,
         'tags': '\n'.join(f'{IMAGE}:{tag}' for tag in [*image_aliases, marker, build_tag]),
         'image': f'{IMAGE}:{image_aliases[0]}',
         'build_tag': build_tag,
+        'candidate_image': f'{IMAGE}:{build_tag}',
+        'marker': marker,
         'source_tag': f'downstream-release-v{version}-{source}' if channel == 'release' else '',
     }
+
+
+def promote(channel: str, version: str, marker: str, digest: str,
+            inspect=inspect_digest, run=subprocess.run) -> None:
+    """Promote one already-built index only; never rebuild while moving aliases."""
+    image_aliases = aliases(channel, version)
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+        raise ValueError('Expected a registry digest, not a mutable candidate tag.')
+    if not re.fullmatch(re.escape(channel) + r'-tree-[0-9a-f]{40}-[0-9]{4}w(?:0[1-9]|[1-4][0-9]|5[0-3])', marker):
+        raise ValueError('Publication marker belongs to another channel or is malformed.')
+    source = f'{IMAGE}@{digest}'
+    if inspect(source) != digest:
+        raise RuntimeError('Candidate is not a verified AMD64/ARM64 image index.')
+    command = ['docker', 'buildx', 'imagetools', 'create']
+    for tag in [*image_aliases, marker]:
+        command += ['--tag', f'{IMAGE}:{tag}']
+    # A single source index is copied, preserving its architecture/attestation entries.
+    run([*command, source], check=True, timeout=180)
+    if not all(inspect(f'{IMAGE}:{tag}') == digest for tag in [*image_aliases, marker]):
+        raise RuntimeError('Incomplete channel promotion; next check will retry.')
 
 
 def outputs(values: dict[str, str]) -> None:
@@ -110,11 +132,14 @@ def outputs(values: dict[str, str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['resolve', 'plan'])
+    parser.add_argument('command', choices=['resolve', 'plan', 'promote'])
     parser.add_argument('channel', choices=['release', 'nightly'])
     args = parser.parse_args()
     if args.command == 'resolve':
         outputs(resolve(args.channel))
+    elif args.command == 'promote':
+        promote(args.channel, os.environ['UPSTREAM_VERSION'],
+                os.environ['PUBLICATION_MARKER'], os.environ['CANDIDATE_DIGEST'])
     else:
         outputs(plan(args.channel, os.environ['UPSTREAM_VERSION'],
                      os.environ['SOURCE_SHA'], os.environ['SOURCE_TREE'],
