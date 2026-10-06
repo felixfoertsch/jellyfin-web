@@ -1,0 +1,2 @@
+# Replay this exact reviewed change; do not download a moving PR diff.
+0001-ask-to-skip-all-segments.patch
