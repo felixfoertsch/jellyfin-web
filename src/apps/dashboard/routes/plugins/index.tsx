@@ -183,18 +183,21 @@ export const Component = () => {
                                 >
                                     <Chip
                                         color={status === PluginStatusOption.All ? 'primary' : undefined}
+                                        // eslint-disable-next-line react/jsx-no-bind
                                         onClick={() => setStatus(PluginStatusOption.All)}
                                         label={globalize.translate('All')}
                                     />
 
                                     <Chip
                                         color={status === PluginStatusOption.Available ? 'primary' : undefined}
+                                        // eslint-disable-next-line react/jsx-no-bind
                                         onClick={() => setStatus(PluginStatusOption.Available)}
                                         label={globalize.translate('LabelAvailable')}
                                     />
 
                                     <Chip
                                         color={status === PluginStatusOption.Installed ? 'primary' : undefined}
+                                        // eslint-disable-next-line react/jsx-no-bind
                                         onClick={() => setStatus(PluginStatusOption.Installed)}
                                         label={globalize.translate('LabelInstalled')}
                                     />
@@ -203,6 +206,7 @@ export const Component = () => {
 
                                     <Chip
                                         color={!category ? 'primary' : undefined}
+                                        // eslint-disable-next-line react/jsx-no-bind
                                         onClick={() => setCategory('')}
                                         label={globalize.translate('All')}
                                     />
@@ -211,6 +215,7 @@ export const Component = () => {
                                         <Chip
                                             key={c}
                                             color={category === c.toLowerCase() ? 'primary' : undefined}
+                                            // eslint-disable-next-line react/jsx-no-bind
                                             onClick={() => setCategory(c.toLowerCase())}
                                             label={globalize.translate(CATEGORY_LABELS[c as PluginCategory])}
                                         />
