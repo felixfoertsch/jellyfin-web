@@ -100,12 +100,23 @@ class SyncTests(unittest.TestCase):
         second = git(self.fork, 'show', 'HEAD:README.md')
         self.assertTrue(tooling.startswith('This fork follows upstream [Jellyfin Web]'))
         self.assertNotIn('1. [', tooling)
-        self.assertIn('1. [settings.patch]', first)
+        self.assertIn('1. [settings.patch settings.patch]', first)
         self.assertNotIn('Second behavior', first)
-        self.assertLess(second.index('1. [settings.patch]'), second.index('2. [Second behavior]'))
+        self.assertLess(second.index('1. [settings.patch settings.patch]'), second.index('2. [second.patch Second behavior]'))
         self.assertEqual((self.fork / 'README.md').read_text().split('\n---\n\n', 1)[1], '# Upstream README\n')
-        self.assertIn('https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/', second)
+        self.assertIn('https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/', second)
         self.assertEqual(git(self.fork, 'rev-list', '--count', upstream + '..HEAD'), '3')
+
+    def test_published_source_omits_queue_keeps_links_and_upstream_readme(self) -> None:
+        write(self.up, 'README.md', '# Upstream README\n')
+        commit(self.up, 'Add README')
+        module.sync(self.fork, omit_queue=True)
+        self.assertFalse((self.fork / '.downstream/patches').exists())
+        self.assertFalse((self.fork / '.downstream/series').exists())
+        self.assertFalse((self.fork / '.github/workflows').exists())
+        readme = (self.fork / 'README.md').read_text()
+        self.assertIn('blob/patch-queue/.downstream/patches/', readme.splitlines()[0])
+        self.assertEqual(readme.split('\n---\n\n', 1)[1], '# Upstream README\n')
 
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:
         first = self.sync()
@@ -119,7 +130,8 @@ class SyncTests(unittest.TestCase):
         commit(self.up, 'Adopt downstream behavior')
         result = self.sync()
         self.assertEqual((self.fork / 'setting.txt').read_text(), 'default=ask\n')
-        self.assertEqual(git(self.fork, 'rev-list', '--count', result['upstream_sha'] + '..HEAD'), '1')
+        self.assertEqual(git(self.fork, 'rev-list', '--count', result['upstream_sha'] + '..HEAD'), '2')
+        self.assertIn('upstream adopted', (self.fork / 'README.md').read_text())
 
     def test_conflict_leaves_fork_unchanged(self) -> None:
         write(self.up, 'setting.txt', 'upstream rewrote this feature\n')

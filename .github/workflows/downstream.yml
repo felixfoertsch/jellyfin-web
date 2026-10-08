@@ -2,7 +2,7 @@ name: Patched Jellyfin Web
 
 on:
   push:
-    branches: [automation]
+    branches: [patch-queue]
   schedule:
     # Fastest GitHub-hosted schedule; not an upstream webhook or timing SLA.
     - cron: '2-59/5 * * * *'
@@ -30,7 +30,7 @@ env:
 jobs:
   sync-test-publish:
     name: Build and publish ${{ matrix.channel }}
-    if: github.repository == 'felixfoertsch/jellyfin-web' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/automation')
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue'
     strategy:
       fail-fast: false
       matrix:
@@ -38,13 +38,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
       packages: write
     steps:
       - name: Check out the current fork tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: automation
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -55,7 +55,7 @@ jobs:
         id: leases
         run: |
           echo "main_sha=$(git ls-remote origin refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
-          echo "automation_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "patch_queue_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Resolve official release or upstream master
         id: channel
@@ -87,6 +87,7 @@ jobs:
         id: publication
         env:
           UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          UPSTREAM_TAG: ${{ steps.channel.outputs.upstream_tag }}
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           SOURCE_TREE: ${{ steps.source.outputs.source_tree }}
           FORCE_REBUILD: ${{ inputs.rebuild || false }}
@@ -106,7 +107,7 @@ jobs:
             SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
             UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
             CHANNEL=${{ matrix.channel }}
-            UPSTREAM_VERSION=${{ steps.channel.outputs.version }}
+            UPSTREAM_VERSION=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
           cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
           cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
 
@@ -128,90 +129,74 @@ jobs:
             SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
             UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
             CHANNEL=${{ matrix.channel }}
-            UPSTREAM_VERSION=${{ steps.channel.outputs.version }}
+            UPSTREAM_VERSION=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/felixfoertsch/jellyfin-web
             org.opencontainers.image.revision=${{ steps.source.outputs.source_sha }}
-            org.opencontainers.image.version=${{ steps.channel.outputs.version }}
+            org.opencontainers.image.version=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
             org.opencontainers.image.licenses=GPL-2.0-or-later
           cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
           cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
           provenance: mode=max
           sbom: true
 
-      - name: Reject changed automation tooling
+      - name: Save candidate evidence
         env:
-          EXPECTED_AUTOMATION: ${{ steps.leases.outputs.automation_sha }}
-        run: test "$(git ls-remote origin refs/heads/automation | cut -f1)" = "$EXPECTED_AUTOMATION"
-
-      - name: Reject superseded source and request a catch-up run
-        id: freshness
-        env:
-          GH_TOKEN: ${{ github.token }}
-          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
-          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
-        run: python3 .downstream/freshness.py '${{ matrix.channel }}' --dispatch-if-changed
-
-      - name: Replace main with current validated upstream plus patch stack
-        if: matrix.channel == 'nightly' && steps.freshness.outputs.current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_BASE: ${{ steps.leases.outputs.main_sha }}
-          EXPECTED_AUTOMATION: ${{ steps.leases.outputs.automation_sha }}
-          EXPECTED_UPSTREAM: ${{ steps.source.outputs.upstream_sha }}
-        run: |
-          git merge-base --is-ancestor "$EXPECTED_UPSTREAM" HEAD
-          test "$(git rev-list --count "HEAD..$EXPECTED_UPSTREAM")" = 0
-          bash .downstream/push-source.sh
-
-      - name: Preserve current validated release source under its own Git tag
-        if: matrix.channel == 'release' && steps.publication.outputs.build == 'true' && steps.freshness.outputs.current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
-        run: bash .downstream/push-release-source.sh
-
-      - name: Promote the built digest to this channel only
-        if: steps.publication.outputs.build == 'true' && steps.freshness.outputs.current == 'true'
-        env:
-          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
-          PUBLICATION_MARKER: ${{ steps.publication.outputs.marker }}
-          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
-        run: python3 .downstream/channels.py promote '${{ matrix.channel }}'
-
-      - name: Check again after publication and immediately request catch-up if needed
-        if: steps.freshness.outputs.current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
-          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
-        run: python3 .downstream/freshness.py '${{ matrix.channel }}' --dispatch-if-changed
-
-      - name: Write channel deployment summary
-        env:
+          CONTROL_SHA: ${{ github.sha }}
           CHANNEL: ${{ matrix.channel }}
           UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          UPSTREAM_TAG: ${{ steps.channel.outputs.upstream_tag }}
           UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
-          IMAGE: ${{ steps.publication.outputs.image }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          SOURCE_TREE: ${{ steps.source.outputs.source_tree }}
+          EXPECTED_BASE: ${{ steps.leases.outputs.main_sha }}
           BUILT: ${{ steps.publication.outputs.build }}
-          BUILD_TAG: ${{ steps.publication.outputs.build_tag }}
           DIGEST: ${{ steps.candidate.outputs.digest }}
+          MARKER: ${{ steps.publication.outputs.marker }}
           SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
-          CURRENT: ${{ steps.freshness.outputs.current }}
         run: |
-          {
-            echo "## Patched Jellyfin Web: $CHANNEL"
-            echo "Upstream: \`$UPSTREAM_REF\` at \`$UPSTREAM_SHA\`"
-            echo "Image: \`$IMAGE\`"
-            if [[ "$CURRENT" != true ]]; then
-              echo 'Upstream moved during this run. No source/rolling-tag promotion; catch-up requested.'
-            elif [[ "$BUILT" == true ]]; then
-              echo "Build tag: \`$BUILD_TAG\`"
-              echo "Digest: \`$DIGEST\`"
-              [[ -z "$SOURCE_TAG" ]] || echo "Corresponding source Git tag: \`$SOURCE_TAG\`"
-            else
-              echo 'Already published: matching source tree, architectures and channel aliases. Ancestry checked.'
-            fi
-            echo 'latest/stable = official release tag + patches; nightly/edge = upstream master + patches.'
-            echo 'Five-minute polling is best-effort. Dispatch events are wake-ups, not alternate source instructions.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          keys = ['CONTROL_SHA', 'CHANNEL', 'UPSTREAM_REF', 'UPSTREAM_VERSION', 'UPSTREAM_TAG', 'UPSTREAM_SHA', 'SOURCE_SHA', 'SOURCE_TREE', 'EXPECTED_BASE', 'BUILT', 'DIGEST', 'MARKER', 'SOURCE_TAG']
+          Path('candidate.json').write_text(json.dumps({key: os.environ[key] for key in keys}))
+          PYTHON
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-${{ matrix.channel }}
+          path: candidate.json
+
+  publish:
+    needs: sync-test-publish
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue'
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [release, nightly]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: candidate-${{ matrix.channel }}
+          path: evidence
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify source, control, upstream and digest, publish through trusted code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ github.sha }}
+          CHANNEL: ${{ matrix.channel }}
+        run: python3 .downstream/publish.py evidence/candidate.json

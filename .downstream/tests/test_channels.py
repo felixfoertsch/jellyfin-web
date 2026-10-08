@@ -21,7 +21,8 @@ class ChannelTests(unittest.TestCase):
     def plan(self, channel='release', **changes):
         args = dict(channel=channel, version='12.1' if channel == 'release' else 'nightly',
                     source='a' * 40, tree='b' * 40, run_id='123', attempt='1',
-                    now=datetime(2026, 10, 2, tzinfo=timezone.utc), inspect=lambda _: None)
+                    now=datetime(2026, 10, 2, tzinfo=timezone.utc), inspect=lambda _: None,
+                    release_tags=lambda: [])
         return module.plan(**{**args, **changes})
 
     def test_numeric_published_releases(self):
@@ -53,9 +54,49 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(self.plan('nightly')['source_tag'], '')
 
     def test_release_has_unique_build_and_corresponding_source_tags(self):
-        result = self.plan()
+        result = self.plan(release_tags=lambda: ['v12.1-2026.10.02.1', 'v12.1-2026.10.02.3'], upstream_tag='v12.1')
         self.assertIn('release-sha-' + 'a' * 40 + '-run-123-1', result['tags'])
-        self.assertEqual(result['source_tag'], 'downstream-release-v12.1-' + 'a' * 40)
+        self.assertEqual(result['source_tag'], 'v12.1-2026.10.02.4')
+        self.assertEqual(result['release_identity'], result['source_tag'])
+
+    def test_release_date_uses_berlin_and_preserves_upstream_tag(self):
+        result = self.plan(now=datetime(2026, 10, 2, 23, tzinfo=timezone.utc),
+                           release_tags=lambda: [], upstream_tag='12.1')
+        self.assertEqual(result['source_tag'], '12.1-2026.10.03.1')
+
+    def test_versioned_container_tag_matches_reserved_source_identity(self):
+        result = self.plan()
+        digest = 'sha256:' + 'a' * 64
+        run = Mock()
+        module.promote('release', '12.1', result['marker'], digest,
+                       inspect=lambda _: digest, run=run, identity=result['release_identity'])
+        self.assertIn(module.IMAGE + ':' + result['source_tag'], run.call_args.args[0])
+        with self.assertRaises(ValueError):
+            module.promote('nightly', 'nightly', self.plan('nightly')['marker'], digest,
+                           inspect=lambda _: digest, run=run, identity=result['source_tag'])
+
+    def test_workflow_only_trusts_patch_queue_and_retains_publication_gates(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/downstream.yml').read_text()
+        push = (root / '.downstream/push-source.sh').read_text()
+        self.assertIn('branches: [patch-queue]', workflow)
+        self.assertIn('ref: ${{ github.sha }}', workflow)
+        build_job, publisher = workflow.split('  publish:', 1)
+        self.assertNotIn('contents: write', build_job)
+        self.assertIn('contents: write', publisher)
+        self.assertIn('persist-credentials: false', publisher)
+        self.assertNotIn('npm ', publisher)
+        self.assertNotIn('refs/heads/automation', workflow + push)
+        self.assertIn('platforms: linux/amd64,linux/arm64', workflow)
+        self.assertIn('refs/heads/patch-queue', push)
+        self.assertIn('--force-with-lease="refs/heads/main:$EXPECTED_BASE"', push)
+        self.assertIn('publish.py evidence/candidate.json', publisher)
+
+    def test_release_counter_errors_fail_closed(self):
+        def fail():
+            raise RuntimeError('Cannot read tags')
+        with self.assertRaisesRegex(RuntimeError, 'Cannot read tags'):
+            self.plan(release_tags=fail)
 
     def test_skip_only_when_marker_and_all_aliases_agree(self):
         self.assertEqual(self.plan(inspect=lambda _: 'same')['build'], 'false')

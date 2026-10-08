@@ -31,7 +31,8 @@ def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
-def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None = None) -> dict[str, str]:
+def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None = None,
+         omit_queue: bool = False) -> dict[str, str]:
     if git(root, 'status', '--porcelain').stdout.strip():
         raise RuntimeError('Refusing to replace a dirty checkout; commit or stash changes first.')
     base = git(root, 'rev-parse', 'HEAD').stdout.strip()
@@ -71,9 +72,11 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             readme = candidate / 'README.md'
             upstream_readme = readme.read_text() if readme.exists() else ''
             patch_items: list[str] = []
+            patch_links: list[str] = []
 
             def update_readme() -> None:
-                readme.write_text('This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) and applies patches below in order. `automation` owns patches and workflows; generated `main` contains upstream source plus these patches. Nightly builds follow upstream default branch; stable builds follow upstream releases.\n\n'
+                links = ', '.join(patch_links)
+                readme.write_text('This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) with accepted patches in order: ' + (links or 'none') + '. `patch-queue` owns patches and workflows; generated `main` contains upstream source plus complete accepted queue. Nightly builds follow upstream default branch; stable builds follow upstream releases.\n\n'
                                   '# Patched Jellyfin Web\n\n'
                                   'Applied patches, oldest first:\n\n'
                                   + ''.join(patch_items) + '\n---\n\n' + upstream_readme)
@@ -91,21 +94,28 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                 patch = candidate / '.downstream/patches' / name
                 if not patch.is_file() or patch.is_symlink():
                     raise RuntimeError(f'Missing or unsafe patch: {name}')
+                patch_links.append(f'[{name.split("-", 1)[0]}](https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/{name})')
                 forward = git(candidate, 'apply', '--index', '--check', str(patch), check=False)
                 if forward.returncode == 0:
                     git(candidate, 'apply', '--index', '--whitespace=error-all', str(patch))
                     subject = next((line.removeprefix('Subject: ').strip()
                                     for line in patch.read_text().splitlines()
                                     if line.startswith('Subject: ')), name)
-                    patch_items.append(f'{len(patch_items) + 1}. [{subject}](https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/{name})\n')
+                    patch_items.append(f'{len(patch_items) + 1}. [{name.split("-", 1)[0]} {subject}](https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/{name})\n')
                     update_readme()
                     source = record(candidate, f'Apply downstream patch: {name}')
                     print(f'Applied {name}', flush=True)
                 elif git(candidate, 'apply', '--index', '--reverse', '--check', str(patch), check=False).returncode == 0:
+                    patch_items.append(f'{len(patch_items) + 1}. [{name.split("-", 1)[0]} {name} (upstream adopted)](https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/{name})\n')
+                    update_readme()
+                    source = record(candidate, f'Record upstream-adopted patch: {name}')
                     print(f'Already present upstream: {name}', flush=True)
                 else:
                     raise RuntimeError(f'Patch no longer applies: {name}\n{forward.stderr}'
                                        'No source branch or image was published.')
+            if omit_queue:
+                git(candidate, 'rm', '-r', '--ignore-unmatch', '.downstream/patches', '.downstream/series')
+                source = record(candidate, 'Keep accepted patch queue on patch-queue only')
             if not is_ancestor(root, upstream, source):
                 raise RuntimeError('Refusing source that loses upstream ancestry.')
         finally:
@@ -123,7 +133,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     root = Path(git(Path.cwd(), 'rev-parse', '--show-toplevel').stdout.strip())
     try:
-        result = sync(root, args.upstream_url, args.upstream_ref)
+        result = sync(root, args.upstream_url, args.upstream_ref, omit_queue=True)
     except (RuntimeError, OSError, ValueError) as error:
         raise SystemExit(str(error)) from error
     for key, value in result.items():

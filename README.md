@@ -1,10 +1,10 @@
-This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) and applies patches below in order. `automation` owns patches and workflows; generated `main` contains upstream source plus these patches. Nightly builds follow upstream default branch; stable builds follow upstream releases.
+This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) with accepted patches in order: [0001](https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/0001-ask-to-skip-all-segments.patch). `patch-queue` owns patches and workflows; generated `main` contains upstream source plus complete accepted queue. Nightly builds follow upstream default branch; stable builds follow upstream releases.
 
 # Patched Jellyfin Web
 
 Applied patches, oldest first:
 
-1. [Make all media segment skip prompts discoverable by default](https://github.com/felixfoertsch/jellyfin-web/blob/automation/.downstream/patches/0001-ask-to-skip-all-segments.patch)
+1. [0001 Make all media segment skip prompts discoverable by default](https://github.com/felixfoertsch/jellyfin-web/blob/patch-queue/.downstream/patches/0001-ask-to-skip-all-segments.patch)
 
 ---
 
