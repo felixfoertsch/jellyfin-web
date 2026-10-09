@@ -93,9 +93,9 @@ def plan(channel: str, version: str, source: str, tree: str, run_id: str,
         raise ValueError('Expected numeric workflow run and attempt IDs.')
     image_aliases = aliases(channel, version)
     # Source tree, rather than commit parent/time, avoids rebuilding releases just
-    # because nightly master advanced. Refresh base images at least weekly.
-    year, week, _ = (now or datetime.now(timezone.utc)).isocalendar()
-    marker = f'{channel}-tree-{tree}-{year}w{week:02d}'
+    # because nightly master advanced. Base-image refreshes require explicit rebuild.
+    # Legacy weekly markers cause one verified publication under the new marker.
+    marker = f'{channel}-tree-{tree}'
     build_tag = f'{channel}-sha-{source}-run-{run_id}-{attempt}'
     build = force or not already_published(marker, image_aliases, inspect)
     identity = ''
@@ -126,7 +126,7 @@ def promote(channel: str, version: str, marker: str, digest: str,
     image_aliases = aliases(channel, version)
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
         raise ValueError('Expected a registry digest, not a mutable candidate tag.')
-    if not re.fullmatch(re.escape(channel) + r'-tree-[0-9a-f]{40}-[0-9]{4}w(?:0[1-9]|[1-4][0-9]|5[0-3])', marker):
+    if not re.fullmatch(re.escape(channel) + r'-tree-[0-9a-f]{40}', marker):
         raise ValueError('Publication marker belongs to another channel or is malformed.')
     source = f'{IMAGE}@{digest}'
     if inspect(source) != digest:

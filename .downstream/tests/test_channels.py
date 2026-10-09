@@ -113,10 +113,42 @@ class ChannelTests(unittest.TestCase):
             raise AssertionError('Force must bypass inspection')
         self.assertEqual(self.plan(force=True, inspect=fail)['build'], 'true')
 
-    def test_weekly_marker_refreshes_base_images(self):
-        first = self.plan()['tags'].splitlines()[-2]
-        next_week = self.plan(now=datetime(2026, 10, 9, tzinfo=timezone.utc))['tags'].splitlines()[-2]
-        self.assertNotEqual(first, next_week)
+    def test_unchanged_publication_skips_across_weeks_and_years(self):
+        digest = 'sha256:' + 'a' * 64
+        for channel in ['release', 'nightly']:
+            first = self.plan(channel)
+            published = {module.IMAGE + ':' + tag: digest
+                         for tag in [first['marker'], *module.aliases(channel, '12.1' if channel == 'release' else 'nightly')]}
+            for date in [datetime(2026, 10, 9, tzinfo=timezone.utc),
+                         datetime(2027, 1, 1, tzinfo=timezone.utc)]:
+                with self.subTest(channel=channel, date=date):
+                    result = self.plan(channel, now=date, inspect=published.get,
+                                       release_tags=lambda: self.fail('Skipped release must not reserve identity'))
+                    self.assertEqual(result['marker'], first['marker'])
+                    self.assertEqual(result['build'], 'false')
+                    self.assertEqual(result['source_tag'], '')
+
+    def test_changed_tree_and_incomplete_publications_rebuild(self):
+        digest = 'sha256:' + 'a' * 64
+        for channel in ['release', 'nightly']:
+            first = self.plan(channel)
+            refs = [module.IMAGE + ':' + tag for tag in
+                    [first['marker'], *module.aliases(channel, '12.1' if channel == 'release' else 'nightly')]]
+            published = dict.fromkeys(refs, digest)
+            self.assertEqual(self.plan(channel, tree='c' * 40, inspect=published.get)['build'], 'true')
+            for ref in refs:
+                for broken in [None, 'sha256:' + 'd' * 64]:
+                    with self.subTest(channel=channel, ref=ref, broken=broken):
+                        incomplete = {**published, ref: broken}
+                        self.assertEqual(self.plan(channel, inspect=incomplete.get)['build'], 'true')
+            self.assertEqual(self.plan(channel, force=True, inspect=published.get)['build'], 'true')
+
+    def test_legacy_weekly_marker_alone_requires_verified_new_publication(self):
+        digest = 'sha256:' + 'a' * 64
+        legacy = module.IMAGE + ':release-tree-' + 'b' * 40 + '-2026w40'
+        published = dict.fromkeys([legacy, *[module.IMAGE + ':' + tag
+                                          for tag in module.aliases('release', '12.1')]], digest)
+        self.assertEqual(self.plan(inspect=published.get)['build'], 'true')
 
     def test_new_parent_commit_does_not_invalidate_source_tree_marker(self):
         first = self.plan()['tags'].splitlines()[-2]

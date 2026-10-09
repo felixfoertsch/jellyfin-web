@@ -84,7 +84,7 @@ Each channel:
    never supply a repository, source ref, patch, or shell command.
 4. Skips compilation when the exact source tree and all channel aliases already
    point to the same AMD64/ARM64 index. Missing/partial publications are retried;
-   a weekly marker refreshes base images. Manual `rebuild` forces a new build.
+   dates never invalidate a publication. Manual `rebuild` refreshes base images.
 5. Builds/tests the production client, runs the PR regression tests, TypeScript
    checks and full Vitest suite, then smoke-tests the AMD64 frontend/proxy image.
 6. Builds and uploads an AMD64/ARM64 candidate under a unique source/run tag, with
@@ -168,8 +168,9 @@ as upstream's latest official release. There is no historical backfill. Numeric
 tags can change with downstream patches/tooling and base-image refreshes; pin a
 unique build tag or digest for an exact rollout/rollback. A unique candidate tag
 may exist even if freshness checking prevented its promotion to the rolling tag.
-Internal `release-tree-*` / `nightly-tree-*` tags mark successful promotions and
-weekly base refreshes. Old tags from previous workflows are not deleted.
+Internal `release-tree-<tree>` / `nightly-tree-<tree>` tags mark successful
+promotions without date expiry. Legacy weekly markers require one verified build
+under the new marker; old tags remain untouched.
 
 `latest` means the latest official **Web** release plus patches, not guaranteed
 compatibility with every older Jellyfin server. Match the Web/server release
