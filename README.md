@@ -1,3 +1,12 @@
+This fork follows upstream [Jellyfin Web](https://github.com/jellyfin/jellyfin-web) with accepted patches in order: none. `patch-queue` owns patches and workflows; generated `main` contains upstream source plus complete accepted queue. Nightly builds follow upstream default branch; stable builds follow upstream releases.
+
+# Patched Jellyfin Web
+
+Applied patches, oldest first:
+
+
+---
+
 <h1 align="center">Jellyfin Web</h1>
 <h3 align="center">Part of the <a href="https://jellyfin.org">Jellyfin Project</a></h3>
 
