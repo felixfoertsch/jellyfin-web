@@ -143,6 +143,29 @@ class SyncTests(unittest.TestCase):
         first = git(self.fork, 'rev-parse', 'HEAD')
         self.assertEqual(self.sync()['source_sha'], first)
 
+    def test_library_default_screen_patch_survives_reconstruction(self) -> None:
+        root = SCRIPT.parent.parent
+        patch_name = '0003-honor-configured-library-default-screens.patch'
+        self.assertIn(patch_name, (SCRIPT.parent / 'series').read_text().splitlines())
+        path = 'src/apps/modern/features/libraries/utils/path.ts'
+        original = (root / path).read_text()
+        write(self.up, path, original)
+        commit(self.up, 'Add upstream library navigation')
+        write(self.fork, '.downstream/series', patch_name + '\n')
+        write(self.fork, '.downstream/patches/' + patch_name,
+              (SCRIPT.parent / 'patches' / patch_name).read_text())
+        commit(self.fork, 'Accept configured library default screens')
+
+        self.sync()
+        self.assertEqual((self.fork / path).read_text(), original.replace(
+            "userSettings.get('landing-' + libraryId, false)",
+            "userSettings.get('landing-' + libraryId)", 1))
+        self.assertTrue((self.fork / path.replace('.ts', '.test.ts')).is_file())
+        self.assertIn('0003 Honor configured library default screens',
+                      (self.fork / 'README.md').read_text())
+        first = git(self.fork, 'rev-parse', 'HEAD')
+        self.assertEqual(self.sync()['source_sha'], first)
+
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:
         first = self.sync()
         second = self.sync()
