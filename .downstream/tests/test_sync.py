@@ -118,6 +118,31 @@ class SyncTests(unittest.TestCase):
         self.assertIn('blob/patch-queue/.downstream/patches/', readme.splitlines()[0])
         self.assertEqual(readme.split('\n---\n\n', 1)[1], '# Upstream README\n')
 
+    def test_safari_playback_background_patch_survives_reconstruction(self) -> None:
+        root = SCRIPT.parent.parent
+        patch_name = '0002-keep-safari-video-playback-background-black.patch'
+        self.assertIn(patch_name, (SCRIPT.parent / 'series').read_text().splitlines())
+        original = (root / 'src/index.html').read_text()
+        write(self.up, 'src/index.html', original)
+        commit(self.up, 'Add upstream HTML entry point')
+        write(self.fork, '.downstream/series', patch_name + '\n')
+        write(self.fork, '.downstream/patches/' + patch_name,
+              (SCRIPT.parent / 'patches' / patch_name).read_text())
+        commit(self.fork, 'Accept Safari playback background fix')
+
+        self.sync()
+        patched = (self.fork / 'src/index.html').read_text()
+        rule = ('        /* Safari needs an opaque page background after video controls fade. */\n'
+                '        html.transparentDocument:has(.videoPlayerContainer) {\n'
+                '            background: #000 !important;\n'
+                '        }\n\n')
+        self.assertEqual(patched, original.replace('        .layout-tv .mouseIdle,\n',
+                                                 rule + '        .layout-tv .mouseIdle,\n', 1))
+        self.assertIn('0002 Keep Safari video playback background black',
+                      (self.fork / 'README.md').read_text())
+        first = git(self.fork, 'rev-parse', 'HEAD')
+        self.assertEqual(self.sync()['source_sha'], first)
+
     def test_second_identical_sync_does_not_create_an_empty_commit(self) -> None:
         first = self.sync()
         second = self.sync()
