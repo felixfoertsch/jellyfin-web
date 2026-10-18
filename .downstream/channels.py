@@ -80,7 +80,8 @@ def remote_tags() -> list[str]:
     result = subprocess.run(['git', 'ls-remote', '--tags', 'origin'],
                             check=True, capture_output=True, text=True, timeout=60)
     return [line.split('\t', 1)[1].removeprefix('refs/tags/')
-            for line in result.stdout.splitlines()]
+            for line in result.stdout.splitlines()
+            if not line.split('\t', 1)[1].startswith('refs/tags/archive/')]
 
 
 def plan(channel: str, version: str, source: str, tree: str, run_id: str,

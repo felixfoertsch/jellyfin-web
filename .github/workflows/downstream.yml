@@ -10,6 +10,10 @@ on:
     types: [upstream-updated]
   workflow_dispatch:
     inputs:
+      expected_control:
+        description: Exact control revision expected by automatic refresh dispatch
+        type: string
+        default: ''
       rebuild:
         description: Rebuild even when both channels are already published
         type: boolean
@@ -29,9 +33,66 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  sync-test-publish:
-    name: Build and publish ${{ matrix.channel }}
+  refresh-plan:
     if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test trusted refresh code
+        run: python3 -m unittest discover -s .downstream/tests -v
+      - name: Reconstruct intended control without write credentials
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_CONTROL: ${{ inputs.expected_control || '' }}
+        run: python3 .downstream/control.py plan refresh --expected-control "$EXPECTED_CONTROL"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          name: control-backup
+          path: refresh/
+          retention-days: 90
+
+  refresh-promote:
+    needs: refresh-plan
+    if: needs.refresh-plan.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: control-backup
+          path: restored-backup
+      - name: Restore uploaded backup into empty repository, verify exact old head
+        run: python3 .downstream/control.py verify restored-backup
+      - name: Reconstruct with old trusted control, archive and refresh atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild || false }}
+        run: |
+          args=()
+          if [[ "$REBUILD" == true ]]; then args+=(--rebuild); fi
+          python3 .downstream/control.py promote restored-backup "${args[@]}"
+
+  sync-test-publish:
+    needs: refresh-plan
+    name: Build and publish ${{ matrix.channel }}
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue' && needs.refresh-plan.outputs.changed == 'false'
     strategy:
       fail-fast: false
       matrix:

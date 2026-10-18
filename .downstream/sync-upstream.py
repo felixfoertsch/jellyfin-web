@@ -17,7 +17,7 @@ import tempfile
 
 
 def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(['git', '-C', str(root), *args], text=True,
+    result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(root), *args], text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if check and result.returncode:
         raise RuntimeError(f"git {' '.join(args)} failed:\n{result.stderr}")
@@ -32,17 +32,85 @@ def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
 
 
 def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None = None,
-         omit_queue: bool = False) -> dict[str, str]:
+         omit_queue: bool = False, control: bool = False,
+         audit: bool = True, selected_commit: str | None = None) -> dict[str, str]:
     if git(root, 'status', '--porcelain').stdout.strip():
         raise RuntimeError('Refusing to replace a dirty checkout; commit or stash changes first.')
     base = git(root, 'rev-parse', 'HEAD').stdout.strip()
     config = json.loads((root / '.downstream/upstream.json').read_text())
     url = upstream_url or config['repository']
     ref = upstream_ref or config['ref']
-    git(root, 'fetch', '--no-tags', url, ref)
+    if control and (url != config['repository'] or ref != config['ref']):
+        raise RuntimeError('Upstream repository or default branch changed; review required.')
+    git(root, 'fetch', '--no-tags', url, selected_commit or ref)
     upstream = git(root, 'rev-parse', 'FETCH_HEAD^{commit}').stdout.strip()
     if git(root, 'ls-tree', upstream, '--', '.downstream').stdout.strip():
         raise RuntimeError('Upstream now owns .downstream; reconcile this reserved path manually.')
+    if control and not is_ancestor(root, config['commit'], upstream):
+        raise RuntimeError('Previous upstream is not ancestor of selected upstream.')
+    if control and audit and config.get('control_refresh') == 1:
+        # Reconstruct old intended source at recorded upstream before refreshing.
+        with tempfile.TemporaryDirectory(prefix='control-old-audit-') as directory:
+            old_source = Path(directory) / 'source'
+            git(root, 'worktree', 'add', '--detach', str(old_source), base)
+            try:
+                expected = sync(old_source, url, ref, control=True, audit=False,
+                                selected_commit=config['commit'])
+                if git(root, 'rev-parse', base + '^{tree}').stdout.strip() != expected['source_tree']:
+                    raise RuntimeError('Unqueued source customization in refreshed control.')
+            finally:
+                git(root, 'worktree', 'remove', '--force', str(old_source))
+    if control and audit and config.get('control_refresh') != 1:
+        # Old control may contain any prefix of the accepted queue (migration).
+        # Compare exact blobs, not merely filenames mentioned by a patch.
+        previous = config['commit']
+        original = git(root, 'show', previous + ':README.md', check=False)
+        readme_path = root / 'README.md'
+        if original.returncode == 0 and not readme_path.is_file():
+            raise RuntimeError('Unqueued upstream README deletion.')
+        if readme_path.exists():
+            readme = readme_path.read_text()
+            if original.returncode or '\n---\n\n' not in readme or readme.split('\n---\n\n', 1)[1] != original.stdout:
+                raise RuntimeError('Unqueued upstream README customization.')
+        with tempfile.TemporaryDirectory(prefix='control-audit-') as audit_dir:
+            audit = Path(audit_dir) / 'source'
+            git(root, 'worktree', 'add', '--detach', str(audit), previous)
+            try:
+                changed = git(root, 'diff', '--name-only', '-z', previous, base).stdout.split('\0')
+                paths = [p for p in changed if p and p != 'README.md'
+                         and not p.startswith(('.downstream/', '.github/workflows/'))]
+                def blobs(tree: Path) -> dict[str, str]:
+                    return {p: git(tree, 'ls-files', '--stage', '--', p).stdout for p in paths}
+                states = [blobs(audit)]
+                for entry in (root / '.downstream/series').read_text().splitlines():
+                    name = entry.split('#', 1)[0].strip()
+                    if not name:
+                        continue
+                    if Path(name).name != name or not name.endswith('.patch'):
+                        raise RuntimeError('Invalid patch filename.')
+                    patch = root / '.downstream/patches' / name
+                    if patch.is_symlink() or not patch.is_file():
+                        raise RuntimeError('Unsafe patch.')
+                    if git(audit, 'apply', '--index', '--check', str(patch), check=False).returncode == 0:
+                        git(audit, 'apply', '--index', str(patch))
+                    elif git(audit, 'apply', '--index', '--reverse', '--check', str(patch), check=False).returncode:
+                        raise RuntimeError('Cannot audit accepted patch against previous upstream.')
+                    states.append(blobs(audit))
+                actual = blobs(root)
+                if any(actual[p] not in [state[p] for state in states] for p in paths):
+                    raise RuntimeError('Unqueued source customization; reconcile before control refresh.')
+            finally:
+                git(root, 'worktree', 'remove', '--force', str(audit))
+    if control:
+        previous = config['commit']
+        owned = git(root, 'ls-tree', '-r', '--name-only', base, '--', '.github/workflows').stdout.splitlines()
+        if owned != ['.github/workflows/downstream.yml']:
+            raise RuntimeError('Unknown executable control workflow.')
+        for path in owned:
+            old_blob = git(root, 'ls-tree', previous, '--', path).stdout
+            new_blob = git(root, 'ls-tree', upstream, '--', path).stdout
+            if new_blob and new_blob != old_blob:
+                raise RuntimeError('Upstream ownership collision: ' + path)
     source = base
     # Stable metadata makes unchanged replay produce identical commit IDs.
     timestamp = git(root, 'show', '-s', '--format=%cI', upstream).stdout.strip()
@@ -50,7 +118,7 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
 
     def record(candidate: Path, message: str) -> str:
         result = subprocess.run(
-            ['git', '-C', str(candidate), '-c', 'commit.gpgsign=false',
+            ['git', '-C', str(candidate), '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
              '-c', 'user.name=github-actions[bot]',
              '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
              'commit', '-m', message], env=commit_env, text=True, capture_output=True)
@@ -66,8 +134,15 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
             git(candidate, 'rm', '-r', '--ignore-unmatch', '.github/workflows')
             git(candidate, 'restore', '--source=' + base, '--staged', '--worktree',
                 '--', '.downstream')
+            if control:
+                git(candidate, 'restore', '--source=' + base, '--staged', '--worktree',
+                    '--', '.github/workflows/downstream.yml')
             config['ref'] = ref
             config['commit'] = upstream
+            if control:
+                config['control_refresh'] = 1
+            else:
+                config.pop('control_refresh', None)
             (candidate / '.downstream/upstream.json').write_text(json.dumps(config, indent=2) + '\n')
             readme = candidate / 'README.md'
             upstream_readme = readme.read_text() if readme.exists() else ''
@@ -120,6 +195,8 @@ def sync(root: Path, upstream_url: str | None = None, upstream_ref: str | None =
                 raise RuntimeError('Refusing source that loses upstream ancestry.')
         finally:
             git(root, 'worktree', 'remove', '--force', str(candidate))
+    if control and is_ancestor(root, upstream, base) and git(root, 'rev-parse', base + '^{tree}').stdout == git(root, 'rev-parse', source + '^{tree}').stdout:
+        source = base
     if source != base:
         git(root, 'reset', '--hard', source)
     return {'base_sha': base, 'upstream_sha': upstream, 'source_sha': source,

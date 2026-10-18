@@ -85,7 +85,7 @@ class ChannelTests(unittest.TestCase):
         self.assertIn('node:24-bookworm-slim', (root / '.downstream/Dockerfile').read_text())
         self.assertEqual([p.name for p in root.iterdir() if p.is_file() and p.name.lower().startswith('readme')], ['README.md'])
         self.assertIn('ref: ${{ github.sha }}', workflow)
-        build_job, publisher = workflow.split('  publish:', 1)
+        build_job, publisher = workflow.split('  sync-test-publish:', 1)[1].split('  publish:', 1)
         self.assertNotIn('contents: write', build_job)
         self.assertIn('contents: write', publisher)
         self.assertIn('persist-credentials: false', publisher)

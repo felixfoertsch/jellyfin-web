@@ -30,7 +30,37 @@ listed in `.downstream/series`. An ordinary automatic merge's file resolution is
 not used: old fork edits cannot silently survive outside the patch queue.
 
 `patch-queue` is the default branch and owns maintained tooling and the patch
-queue. Generated `main` follows upstream master plus **one tooling commit, one
+queue. Every scheduled run first reconstructs it from the actual upstream default
+branch, the complete accepted queue, and the explicit `.downstream/` plus
+`.github/workflows/downstream.yml` control overlay. Root README content comes
+from fresh upstream with the ordered patch preface; old application files are
+never copied. Unknown source edits, upstream ownership collisions, changed
+upstream repository/default branch, or rewritten upstream ancestry stop refresh.
+
+The read-only planning job builds deterministic control, then uploads a
+self-contained old-control bundle and SHA-256 manifest with 90-day retention.
+The separate trusted old-control publisher downloads and restores that bundle
+into an empty repository, checks connectivity and the exact old head, independently
+reconstructs the candidate without its write token, and checks complete workflow
+tree identity. It rechecks upstream/control immediately before an atomic push
+that creates immutable lightweight `archive/patch-queue/<old SHA>` and updates
+`patch-queue` with explicit leases. Wrong archive targets and unsupported atomic
+pushes fail closed. Authoritative control/archive readback must match before
+dispatch. Existing correct archive tags remain immutable by policy: Git cannot
+compare-and-swap an unchanged ref on the server, so pre/post checks detect races
+but cannot prevent a privileged external actor from deleting or changing that tag.
+Missing tags are created atomically with the control update. Archive tags are not
+release/version tags and must not be
+removed by release cleanup. Identical intended trees with current upstream
+ancestry are no-ops and create no archive.
+
+A successful refresh explicitly dispatches this workflow with the exact new
+control SHA and preserves only explicit manual rebuild intent. Old run skips
+builds; mismatched dispatches fail before planning. Dispatch failure fails the
+job; the next scheduled run starts from new control and recovers. Built-in job
+token must permit this atomic update while preserving workflow bytes; no personal
+token fallback exists. Upstream workflows stay absent from executable fork CI.
+ Generated `main` follows upstream master plus **one tooling commit, one
 commit per accepted patch, and one queue-removal commit**, including exact
 reverse-verified upstream adoptions. The default branch's scheduled workflow
 checks out `patch-queue`, rebuilds
