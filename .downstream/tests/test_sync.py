@@ -122,7 +122,8 @@ class SyncTests(unittest.TestCase):
         root = SCRIPT.parent.parent
         patch_name = '0002-keep-safari-video-playback-background-black.patch'
         self.assertIn(patch_name, (SCRIPT.parent / 'series').read_text().splitlines())
-        original = (root / 'src/index.html').read_text()
+        upstream = json.loads((SCRIPT.parent / 'upstream.json').read_text())['commit']
+        original = git(root, 'show', upstream + ':src/index.html') + '\n'
         write(self.up, 'src/index.html', original)
         commit(self.up, 'Add upstream HTML entry point')
         write(self.fork, '.downstream/series', patch_name + '\n')
@@ -148,7 +149,8 @@ class SyncTests(unittest.TestCase):
         patch_name = '0003-honor-configured-library-default-screens.patch'
         self.assertIn(patch_name, (SCRIPT.parent / 'series').read_text().splitlines())
         path = 'src/apps/modern/features/libraries/utils/path.ts'
-        original = (root / path).read_text()
+        upstream = json.loads((SCRIPT.parent / 'upstream.json').read_text())['commit']
+        original = git(root, 'show', upstream + ':' + path) + '\n'
         write(self.up, path, original)
         commit(self.up, 'Add upstream library navigation')
         write(self.fork, '.downstream/series', patch_name + '\n')
