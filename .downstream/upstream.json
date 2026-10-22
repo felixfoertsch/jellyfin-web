@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/jellyfin/jellyfin-web.git",
+  "ref": "refs/tags/v12.3",
+  "commit": "c06cb17b274c10f9015412305edb0afdc010ae7a"
+}
