@@ -29,6 +29,11 @@
             background-color: transparent !important;
         }
 
+        /* Safari needs an opaque page background after video controls fade. */
+        html.transparentDocument:has(.videoPlayerContainer) {
+            background: #000 !important;
+        }
+
         .layout-tv .mouseIdle,
         .layout-tv .mouseIdle button,
         .layout-tv .mouseIdle select,
