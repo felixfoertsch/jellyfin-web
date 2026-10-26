@@ -1,0 +1,87 @@
+From 618e2153e147937f22832c2e749afffb362c6793
+Subject: Make all media segment skip prompts discoverable by default
+Origin: https://github.com/jellyfin/jellyfin-web/pull/8513
+
+Exact source and regression-test changes from the reviewed commit.
+
+diff --git a/src/apps/legacy/features/playback/utils/mediaSegmentSettings.ts b/src/apps/legacy/features/playback/utils/mediaSegmentSettings.ts
+--- a/src/apps/legacy/features/playback/utils/mediaSegmentSettings.ts
++++ b/src/apps/legacy/features/playback/utils/mediaSegmentSettings.ts
+@@ -1,20 +1,15 @@
+-import { MediaSegmentType } from '@jellyfin/sdk/lib/generated-client/models/media-segment-type';
++import type { MediaSegmentType } from '@jellyfin/sdk/lib/generated-client/models/media-segment-type';
+ 
+-import { UserSettings } from 'scripts/settings/userSettings';
++import type { UserSettings } from 'scripts/settings/userSettings';
+ 
+ import { MediaSegmentAction } from '../constants/mediaSegmentAction';
+ 
+ const PREFIX = 'segmentTypeAction';
+-const DEFAULT_ACTIONS: Partial<Record<MediaSegmentType, MediaSegmentAction>> = {
+-    [MediaSegmentType.Intro]: MediaSegmentAction.AskToSkip,
+-    [MediaSegmentType.Outro]: MediaSegmentAction.AskToSkip
+-};
+ 
+ export const getId = (type: MediaSegmentType) => `${PREFIX}__${type}`;
+ 
+ export function getMediaSegmentAction(userSettings: UserSettings, type: MediaSegmentType): MediaSegmentAction {
+     const action = userSettings.get(getId(type), false);
+-    const defaultAction = DEFAULT_ACTIONS[type] || MediaSegmentAction.None;
+ 
+-    return action ? action as MediaSegmentAction : defaultAction;
++    return action ? action as MediaSegmentAction : MediaSegmentAction.AskToSkip;
+ }
+diff --git a/src/apps/legacy/features/playback/utils/mediaSegmentSettings.test.ts b/src/apps/legacy/features/playback/utils/mediaSegmentSettings.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/apps/legacy/features/playback/utils/mediaSegmentSettings.test.ts
+@@ -0,0 +1,49 @@
++import { MediaSegmentType } from '@jellyfin/sdk/lib/generated-client/models/media-segment-type';
++import { describe, expect, it, vi } from 'vitest';
++
++import type { UserSettings } from 'scripts/settings/userSettings';
++
++import { getId, getMediaSegmentAction } from './mediaSegmentSettings';
++import { MediaSegmentAction } from '../constants/mediaSegmentAction';
++
++const TEST_SEGMENT_TYPES = [
++    ...Object.values(MediaSegmentType),
++    'FutureSegmentType' as MediaSegmentType
++];
++
++function createUserSettings(action?: string | null) {
++    const get = vi.fn().mockReturnValue(action);
++    const set = vi.fn();
++
++    return {
++        settings: { get, set } as unknown as UserSettings,
++        get,
++        set
++    };
++}
++
++describe('getId()', () => {
++    it.each(TEST_SEGMENT_TYPES)('Should preserve the existing preference key for %s', type => {
++        expect(getId(type)).toBe(`segmentTypeAction__${type}`);
++    });
++});
++
++describe('getMediaSegmentAction()', () => {
++    describe.each(TEST_SEGMENT_TYPES)('%s', type => {
++        it.each([undefined, null, ''])('Should ask to skip when the stored value is %s', value => {
++            const { settings, get, set } = createUserSettings(value);
++
++            expect(getMediaSegmentAction(settings, type)).toBe(MediaSegmentAction.AskToSkip);
++            expect(get).toHaveBeenCalledWith(getId(type), false);
++            expect(set).not.toHaveBeenCalled();
++        });
++
++        it.each(Object.values(MediaSegmentAction))('Should preserve a saved %s', action => {
++            const { settings, get, set } = createUserSettings(action);
++
++            expect(getMediaSegmentAction(settings, type)).toBe(action);
++            expect(get).toHaveBeenCalledWith(getId(type), false);
++            expect(set).not.toHaveBeenCalled();
++        });
++    });
++});
