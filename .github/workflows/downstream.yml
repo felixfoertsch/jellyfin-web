@@ -1,0 +1,264 @@
+name: Patched Jellyfin Web
+
+on:
+  push:
+    branches: [patch-queue]
+  schedule:
+    # Fastest GitHub-hosted schedule; not an upstream webhook or timing SLA.
+    - cron: '2-59/5 * * * *'
+  repository_dispatch:
+    types: [upstream-updated]
+  workflow_dispatch:
+    inputs:
+      expected_control:
+        description: Exact control revision expected by automatic refresh dispatch
+        type: string
+        default: ''
+      rebuild:
+        description: Rebuild even when both channels are already published
+        type: boolean
+        default: false
+
+# Coalesce wake-ups, but never cancel a running publisher halfway through.
+# Retain the old group so legacy and new publishers cannot overlap.
+concurrency:
+  group: downstream-master
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  refresh-plan:
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test trusted refresh code
+        run: python3 -m unittest discover -s .downstream/tests -v
+      - name: Reconstruct intended control without write credentials
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_CONTROL: ${{ inputs.expected_control || '' }}
+        run: python3 .downstream/control.py plan refresh --expected-control "$EXPECTED_CONTROL"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          name: control-backup
+          path: refresh/
+          retention-days: 90
+
+  refresh-promote:
+    needs: refresh-plan
+    if: needs.refresh-plan.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: control-backup
+          path: restored-backup
+      - name: Restore uploaded backup into empty repository, verify exact old head
+        run: python3 .downstream/control.py verify restored-backup
+      - name: Reconstruct with old trusted control, archive and refresh atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild || false }}
+        run: |
+          args=()
+          if [[ "$REBUILD" == true ]]; then args+=(--rebuild); fi
+          python3 .downstream/control.py promote restored-backup "${args[@]}"
+
+  sync-test-publish:
+    needs: refresh-plan
+    name: Build and publish ${{ matrix.channel }}
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue' && needs.refresh-plan.outputs.changed == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [release, nightly]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the current fork tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test ancestry, patch replay, channel isolation and freshness gates
+        run: python3 -m unittest discover -s .downstream/tests -v
+
+      - name: Capture publication leases
+        id: leases
+        run: |
+          echo "main_sha=$(git ls-remote origin refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "patch_queue_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve official release or upstream master
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Dispatch payloads are deliberately ignored: only fixed upstream refs.
+        run: python3 .downstream/channels.py resolve '${{ matrix.channel }}'
+
+      - name: Reconstruct upstream plus patches and preserve upstream ancestry
+        id: source
+        env:
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+        run: python3 .downstream/sync-upstream.py --upstream-ref "$UPSTREAM_REF"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Plan tags and check whether this source is already published
+        id: publication
+        env:
+          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          UPSTREAM_TAG: ${{ steps.channel.outputs.upstream_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          SOURCE_TREE: ${{ steps.source.outputs.source_tree }}
+          FORCE_REBUILD: ${{ inputs.rebuild || false }}
+        run: python3 .downstream/channels.py plan '${{ matrix.channel }}'
+
+      - name: Build, run regression tests, and compile production assets
+        if: steps.publication.outputs.build == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .downstream/Dockerfile
+          platforms: linux/amd64
+          load: true
+          pull: true
+          tags: jellyfin-web-smoke:local
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
+            UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
+            CHANNEL=${{ matrix.channel }}
+            UPSTREAM_VERSION=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
+          cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
+          cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
+
+      - name: Smoke-test static files, API routing, and WebSockets
+        if: steps.publication.outputs.build == 'true'
+        run: bash .downstream/smoke-test.sh jellyfin-web-smoke:local
+
+      - name: Build and upload candidate without moving rolling tags
+        if: steps.publication.outputs.build == 'true'
+        id: candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .downstream/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.publication.outputs.candidate_image }}
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.source_sha }}
+            UPSTREAM_REVISION=${{ steps.source.outputs.upstream_sha }}
+            CHANNEL=${{ matrix.channel }}
+            UPSTREAM_VERSION=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/felixfoertsch/jellyfin-web
+            org.opencontainers.image.revision=${{ steps.source.outputs.source_sha }}
+            org.opencontainers.image.version=${{ steps.publication.outputs.release_identity || steps.channel.outputs.version }}
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+          cache-from: type=gha,scope=patched-web-${{ matrix.channel }}
+          cache-to: type=gha,mode=max,scope=patched-web-${{ matrix.channel }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Save candidate evidence
+        env:
+          CONTROL_SHA: ${{ github.sha }}
+          CHANNEL: ${{ matrix.channel }}
+          UPSTREAM_REF: ${{ steps.channel.outputs.upstream_ref }}
+          UPSTREAM_VERSION: ${{ steps.channel.outputs.version }}
+          UPSTREAM_TAG: ${{ steps.channel.outputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ steps.source.outputs.upstream_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          SOURCE_TREE: ${{ steps.source.outputs.source_tree }}
+          EXPECTED_BASE: ${{ steps.leases.outputs.main_sha }}
+          BUILT: ${{ steps.publication.outputs.build }}
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          MARKER: ${{ steps.publication.outputs.marker }}
+          SOURCE_TAG: ${{ steps.publication.outputs.source_tag }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          keys = ['CONTROL_SHA', 'CHANNEL', 'UPSTREAM_REF', 'UPSTREAM_VERSION', 'UPSTREAM_TAG', 'UPSTREAM_SHA', 'SOURCE_SHA', 'SOURCE_TREE', 'EXPECTED_BASE', 'BUILT', 'DIGEST', 'MARKER', 'SOURCE_TAG']
+          Path('candidate.json').write_text(json.dumps({key: os.environ[key] for key in keys}))
+          PYTHON
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-${{ matrix.channel }}
+          path: candidate.json
+
+  publish:
+    needs: sync-test-publish
+    if: github.repository == 'felixfoertsch/jellyfin-web' && github.ref == 'refs/heads/patch-queue'
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [release, nightly]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: candidate-${{ matrix.channel }}
+          path: evidence
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify source, control, upstream and digest, publish through trusted code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ github.sha }}
+          CHANNEL: ${{ matrix.channel }}
+        run: python3 .downstream/publish.py evidence/candidate.json
