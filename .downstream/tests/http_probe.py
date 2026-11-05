@@ -77,6 +77,11 @@ def probe(port: int) -> None:
         result = json.loads(body)
         assert status == 200 and result['mock_backend'] and result['path'] == path
         assert result['forwarded_proto'] == 'https'
+    for path in ['/web/ConfigurationPage?name=TubeArchivist%20Metadata',
+                 '/web/configurationpage?name=x', '/web/ConfigurationPages?enableInMainMenu=true']:
+        status, _, body = get(path)
+        result = json.loads(body)
+        assert status == 200 and result['mock_backend'] and result['path'] == path, (path, status)
     key = base64.b64encode(b'0123456789abcdef').decode()
     status, headers, _ = get('/socket?sample=1', {
         'Connection': 'Upgrade', 'Upgrade': 'websocket',
@@ -86,7 +91,7 @@ def probe(port: int) -> None:
         (key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode(), usedforsecurity=False
     ).digest()).decode()
     assert status == 101 and headers['sec-websocket-accept'] == expected
-    print('PASS: redirects, static assets, missing assets, API, stream URL, HTTPS forwarding, WebSocket handshake')
+    print('PASS: redirects, static assets, missing assets, API, plugin pages, stream URL, HTTPS forwarding, WebSocket handshake')
 
 
 if __name__ == '__main__':
