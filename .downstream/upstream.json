@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/jellyfin/jellyfin-web.git",
+  "ref": "refs/heads/master",
+  "commit": "c1b007cb11be0bf88ca65cde3b3f152735cc4d34",
+  "control_refresh": 1
+}
