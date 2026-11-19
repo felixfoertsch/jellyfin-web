@@ -23,7 +23,7 @@ export const getDefaultViewIndex = (path: string, libraryId?: string | null) => 
     if (!libraryId) return 0;
 
     const views = LibraryRoutes.find(route => route.path === path)?.views ?? [];
-    const defaultView = userSettings.get('landing-' + libraryId, false);
+    const defaultView = userSettings.get('landing-' + libraryId);
 
     return views.find(view => view.view === defaultView)?.index
         ?? views.find(view => view.isDefault)?.index
