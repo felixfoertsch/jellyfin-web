@@ -1,0 +1,73 @@
+Subject: Honor configured library default screens
+
+Home settings saves landing screens in account display preferences. The modern
+layout read only the browser-local copy, so a browser without that copy ignored
+the configured screen when navigating back to a library. Read the existing
+in-memory account preference cache, matching the settings writer and legacy UI.
+No extra requests or writes; sort, filter and layout storage stays local.
+
+Regression covers independent library defaults, Live TV and fallback behavior.
+
+diff --git a/src/apps/modern/features/libraries/utils/path.ts b/src/apps/modern/features/libraries/utils/path.ts
+--- a/src/apps/modern/features/libraries/utils/path.ts
++++ b/src/apps/modern/features/libraries/utils/path.ts
+@@ -23,7 +23,7 @@ export const getDefaultViewIndex = (path: string, libraryId?: string | null) => {
+     if (!libraryId) return 0;
+ 
+     const views = LibraryRoutes.find(route => route.path === path)?.views ?? [];
+-    const defaultView = userSettings.get('landing-' + libraryId, false);
++    const defaultView = userSettings.get('landing-' + libraryId);
+ 
+     return views.find(view => view.view === defaultView)?.index
+         ?? views.find(view => view.isDefault)?.index
+diff --git a/src/apps/modern/features/libraries/utils/path.test.ts b/src/apps/modern/features/libraries/utils/path.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/apps/modern/features/libraries/utils/path.test.ts
+@@ -0,0 +1,46 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++
++import * as userSettings from 'scripts/settings/userSettings';
++import { LibraryTab } from 'types/libraryTab';
++
++import { getDefaultViewIndex } from './path';
++
++vi.mock('scripts/settings/userSettings', () => ({ get: vi.fn() }));
++
++beforeEach(() => {
++    vi.mocked(userSettings.get).mockReset();
++});
++
++describe('getDefaultViewIndex()', () => {
++    it('uses cached account defaults independently when switching libraries without local defaults', () => {
++        const preferences: Record<string, string> = {
++            'landing-youtube': LibraryTab.Episodes,
++            'landing-shows': LibraryTab.Series
++        };
++        vi.mocked(userSettings.get).mockImplementation((key: string, enableOnServer?: boolean) => (
++            enableOnServer === false ? null : preferences[key]
++        ));
++
++        expect(getDefaultViewIndex('/tv', 'youtube')).toBe(5);
++        expect(getDefaultViewIndex('/tv', 'shows')).toBe(0);
++        expect(getDefaultViewIndex('/tv', 'youtube')).toBe(5);
++    });
++
++    it('preserves the Live TV default screen', () => {
++        vi.mocked(userSettings.get).mockReturnValue(LibraryTab.Guide);
++
++        expect(getDefaultViewIndex('/livetv', 'livetv')).toBe(1);
++        expect(userSettings.get).toHaveBeenCalledWith('landing-livetv');
++    });
++
++    it.each([undefined, null, '', 'unknown', LibraryTab.Movies])('falls back for unsupported TV defaults: %s', value => {
++        vi.mocked(userSettings.get).mockReturnValue(value ?? null);
++
++        expect(getDefaultViewIndex('/tv', 'youtube')).toBe(0);
++    });
++
++    it.each([undefined, null, ''])('does not read preferences without a library: %s', libraryId => {
++        expect(getDefaultViewIndex('/tv', libraryId)).toBe(0);
++        expect(userSettings.get).not.toHaveBeenCalled();
++    });
++});
